@@ -12,7 +12,7 @@
 # GPIO mapping has to be adapted with HW
 #
 
-SX1302_RESET_PIN=26     # SX1302 reset
+SX1302_RESET_PIN=506     # SX1302 reset
 
 WAIT_GPIO() {
     usleep 100000
