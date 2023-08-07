@@ -1,8 +1,8 @@
 {
     "SX130x_conf": {
         "com_type": "SPI",
-        "com_path": "/dev/spidev0.0",
-        "lorawan_public": true,
+        "com_path": "/dev/spidev1.0",
+        "lorawan_public": false,
         "clksrc": 0,
         "antenna_gain": 0, /* antenna gain, in dBi */
         "full_duplex": false,
@@ -89,7 +89,6 @@
         "forward_crc_error": false,
         "forward_crc_disabled": false,
         /* GPS configuration */
-        "gps_tty_path": "/dev/ttyS0",
         /* GPS reference coordinates */
         "ref_latitude": 0.0,
         "ref_longitude": 0.0,
