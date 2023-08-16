@@ -40,6 +40,8 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #include <math.h>           /* modf */
 
 #include <sys/socket.h>     /* socket specific definitions */
+#include <sys/ioctl.h>
+#include <linux/if.h>
 #include <netinet/in.h>     /* INET constants and stuff */
 #include <arpa/inet.h>      /* IP address conversion stuff */
 #include <netdb.h>          /* gai_strerror */
@@ -320,6 +322,27 @@ static void sig_handler(int sigio) {
         exit_sig = true;
     }
     return;
+}
+
+static int parse_mac_address(unsigned char *mac) {
+    struct ifreq ifr;
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        printf("Failed to socket.");
+        return -1;
+    }
+    strcpy(ifr.ifr_name, "eth0");
+    if (ioctl(sock, SIOCGIFHWADDR, &ifr) < 0) {
+        printf("Failed to ioctl.");
+        close(sock);
+        return -1;
+    }
+
+    close(sock);
+
+    unsigned char *buf = (unsigned char *)ifr.ifr_hwaddr.sa_data;
+    memcpy(mac, buf, 6);
+    return 0;
 }
 
 static int parse_SX130x_configuration(const char * conf_file) {
@@ -1035,12 +1058,27 @@ static int parse_gateway_configuration(const char * conf_file) {
     }
 
     /* gateway unique identifier (aka MAC address) (optional) */
+#if 1
+    unsigned char mac_addr[6];
+    unsigned char mac_str[18];
+    parse_mac_address(mac_addr);
+    snprintf(mac_str, sizeof(mac_str),
+        "%02X%02X%02XFFFE%02X%02X%02X",
+        mac_addr[0], mac_addr[1], mac_addr[2],
+        mac_addr[3], mac_addr[4], mac_addr[5]);
+        if (mac_addr[0] != '\0') {
+        sscanf((const char*)mac_str, "%llx", &ull);
+        lgwm = ull;
+        MSG("INFO: gateway MAC address is configured to %016llX\n", ull);
+    }
+#else
     str = json_object_get_string(conf_obj, "gateway_ID");
     if (str != NULL) {
         sscanf(str, "%llx", &ull);
         lgwm = ull;
         MSG("INFO: gateway MAC address is configured to %016llX\n", ull);
     }
+#endif 
 
     /* server hostname or IP address (optional) */
     str = json_object_get_string(conf_obj, "server_address");
