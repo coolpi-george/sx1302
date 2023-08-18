@@ -29,7 +29,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #include <stdbool.h>        /* bool type */
 #include <stdio.h>          /* printf, fprintf, snprintf, fopen, fputs */
 #include <inttypes.h>       /* PRIx64, PRIu64... */
-
+#include <dirent.h>
 #include <string.h>         /* memset */
 #include <signal.h>         /* sigaction */
 #include <time.h>           /* time, clock_gettime, strftime, gmtime */
@@ -38,11 +38,18 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #include <stdlib.h>         /* atoi, exit */
 #include <errno.h>          /* error messages */
 #include <math.h>           /* modf */
-
+#include "jhash.h"          /* Example hash function */
+#include <urcu/compiler.h>  /* For CAA_ARRAY_SIZE */
+#include <urcu/rculfhash.h> /* RCU Lock-free hash table */
+#include <urcu/urcu-memb.h> /* RCU flavor */
+#include <net/if.h>
 #include <sys/socket.h>     /* socket specific definitions */
 #include <netinet/in.h>     /* INET constants and stuff */
 #include <arpa/inet.h>      /* IP address conversion stuff */
 #include <netdb.h>          /* gai_strerror */
+
+#include <sys/ioctl.h>
+
 
 #include <pthread.h>
 
@@ -63,7 +70,13 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #define STR(x)          STRINGIFY(x)
 
 #define RAND_RANGE(min, max) (rand() % (max + 1 - min) + min)
-
+#define FILTER_CONF_PATH_DEFAULT "/etc/lorawan_filter/lorawan_filter.conf"
+#define COM_PATH_DEFAULT         "/dev/spidev1.0"
+#define ETH_NAME_DEFAULT         "eth0"
+#define MAX_ETH_MAC_LEN          6
+#define MAX_SPI_PATH   32
+#define MAX_LORA_MAC   8
+#define MAX_GATEWAY_ID 16
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE CONSTANTS ---------------------------------------------------- */
 
@@ -131,12 +144,29 @@ typedef struct spectral_scan_s {
     uint32_t pace_s;        /* number of seconds between 2 scans in the thread */
 } spectral_scan_t;
 
+
+typedef struct dev_addr_htn {
+    uint32_t             value;
+    uint32_t             seqnum; /* Our node sequence number */
+    struct cds_lfht_node node;
+} dev_addr_htn_t;
+
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE VARIABLES (GLOBAL) ------------------------------------------- */
 
 /* signal handling variables */
 volatile bool exit_sig = false; /* 1 -> application terminates cleanly (shut down hardware, close open files, etc) */
 volatile bool quit_sig = false; /* 1 -> application terminates without shutting down the hardware */
+
+/* lorawan filters */
+
+bool filter_enable = false;
+bool white_list_empty = false;
+struct cds_lfht *dev_ht;
+int seqnum = 0;
+time_t seed = 0;
+struct cds_lfht_iter iter = { 0 };
+pthread_t stat_tid;
 
 /* packets filtering configuration variables */
 static bool fwd_valid_pkt = true; /* packets with PAYLOAD CRC OK are forwarded */
@@ -319,7 +349,259 @@ static void sig_handler(int sigio) {
     } else if ((sigio == SIGINT) || (sigio == SIGTERM)) {
         exit_sig = true;
     }
+    // 直接关闭，不然主进程30s间隔很难退出
+    pthread_cancel(stat_tid);
     return;
+}
+
+int get_spidev_path(char *spi_name)
+{
+    DIR *dir;
+    struct dirent *entry;
+    const char *spi_prefix = "spi";
+    char buf[MAX_SPI_PATH * 10] = { 0 };
+    dir = opendir("/sys/class/spidev");
+    if (dir == NULL) {
+        MSG("ERROR: opendir failed.\n");
+        return -1;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (strstr(entry->d_name, spi_prefix)) {
+            snprintf(buf, MAX_SPI_PATH * 10, "/dev/%s", entry->d_name);
+            memcpy(spi_name, buf, MAX_SPI_PATH);
+            closedir(dir);
+            return 0;
+        }
+    }
+
+    closedir(dir);
+    return -1;
+}
+
+int get_local_eth_mac(unsigned char *mac_address)
+{
+    struct ifreq ifr;
+    int          sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        MSG("[ERROR]Failed to socket.\n");
+        return -1;
+    }
+    strncpy(ifr.ifr_name, ETH_NAME_DEFAULT, IFNAMSIZ - 1);
+    if (ioctl(sock, SIOCGIFHWADDR, &ifr) < 0) {
+        MSG("[ERROR]Failed to ioctl.\n");
+        close(sock);
+        return -1;
+    }
+
+    close(sock);
+
+    unsigned char *buf = (unsigned char *)ifr.ifr_hwaddr.sa_data;
+    memcpy(mac_address, buf, MAX_ETH_MAC_LEN);
+    return 0;
+}
+
+
+bool hex_characters(const char ch)
+{
+    if ((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'F') || (ch >= 'a' && ch <= 'f')) {
+        return true;
+    }
+    return false;
+}
+
+static int dev_addr_str2hex(short *pbDest, const char *pbSrc, int nLen)
+{
+    if (nLen != MAX_LORA_MAC) {
+        printf("ERROR: n len is less than 8 bytes.\n");
+        return -1;
+    }
+    char h1, h2;
+    int  i;
+    char hex[3] = { 0 };
+    for (i = 0; i < (nLen / 2); i++) {
+        memset(hex, 0, 3);
+        h1 = pbSrc[2 * i];
+        h2 = pbSrc[2 * i + 1];
+        if (hex_characters(h1) && hex_characters(h2)) {
+            snprintf(hex, 3, "%c%c", h1, h2);
+            pbDest[i] = (int)strtol(hex, NULL, 16);
+        } else {
+            printf("ERROR: format.");
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int dev_addr_hex2int(short *dev_array, uint32_t *addr_val)
+{
+    if (dev_array == NULL || addr_val == NULL) {
+        MSG("ERROR, null poiter.\n");
+        return -1;
+    }
+    *addr_val = dev_array[3];
+    *addr_val |= (dev_array[2]) << 8;
+    *addr_val |= (dev_array[1]) << 16;
+    *addr_val |= (dev_array[0]) << 24;
+    return 0;
+}
+
+int match(struct cds_lfht_node *ht_node, const void *_key)
+{
+    dev_addr_htn_t *match_node = caa_container_of(ht_node, dev_addr_htn_t, node);
+    const uint32_t *key        = _key;
+    return (*key == match_node->value);
+}
+
+
+int parse_filter_configuration(void)
+{
+    JSON_Value     *root_val   = NULL;
+    JSON_Object    *conf_obj   = NULL;
+    JSON_Array     *conf_array = NULL;
+    dev_addr_htn_t *dev_node   = NULL;
+    JSON_Value     *val        = NULL; /* needed to detect the absence of some fields */
+    const char     *str;
+    unsigned long   hash           = 0;
+    short           value_array[4] = { 0 };
+    uint32_t        addr_value     = 0;
+    uint32_t        seqnum         = 0;
+    /* try to parse JSON */
+    root_val = json_parse_file_with_comments(FILTER_CONF_PATH_DEFAULT);
+    if (root_val == NULL) {
+        printf("ERROR: %s is not a valid JSON file\n", FILTER_CONF_PATH_DEFAULT);
+        return -1;
+    }
+
+    /* point to the gateway configuration object */
+    conf_obj = json_value_get_object(root_val);
+    if (conf_obj == NULL) {
+        json_value_free(root_val);
+        return -1;
+    } else {
+        printf("INFO: %s does contain a JSON object , parsing debug parameters\n",
+               FILTER_CONF_PATH_DEFAULT);
+    }
+
+    val = json_object_get_value(conf_obj, "filter_enable");
+    if (json_value_get_type(val) == JSONBoolean) {
+        filter_enable = (bool)json_value_get_boolean(val);
+        printf("INFO: lorawan filter enable :%d \n", filter_enable);
+    }
+    if (filter_enable == false) {
+        printf("INFO: LoRaWAN filter is not enable.\n");
+        json_value_free(root_val);
+        return -1;
+    }
+
+    conf_array = json_object_get_array(conf_obj, "white_list");
+    if (conf_array == NULL) {
+        printf("INFO: dev White list is empty.\n");
+        white_list_empty = true;
+        json_value_free(root_val);
+        return -1;
+    }
+    white_list_empty = false;
+
+    /* Use time as seed for hash table hashing. */
+    seed = time(NULL);
+    /*
+	 * Allocate hash table.
+	 */
+    dev_ht = cds_lfht_new_flavor(
+        1, 1, 0, CDS_LFHT_AUTO_RESIZE | CDS_LFHT_ACCOUNTING, &urcu_memb_flavor, NULL);
+    if (!dev_ht) {
+        printf("ERROR:  allocating dev_ht\n");
+        json_value_free(root_val);
+        return -1;
+    }
+
+    for (int i = 0; i < (int)json_array_get_count(conf_array); ++i) {
+        str = json_array_get_string(conf_array, i);
+        // MSG("DEBUG: while list dev: %s \n", str);
+        memset(value_array, 0, sizeof(value_array));
+        if (dev_addr_str2hex(value_array, str, strlen(str)) == -1) {
+            MSG("ERROR: dev_addr[%s]str2hex is failed.\n", str);
+            continue;
+        }
+        if (dev_addr_hex2int(value_array, &addr_value) == -1) {
+            MSG("ERROR: dev_addr[%s]hex2int is failed.\n", str);
+            continue;
+        }
+        dev_node = (dev_addr_htn_t *)malloc(sizeof(dev_addr_htn_t));
+        if (!dev_node) {
+            json_value_free(root_val);
+            MSG("ERROR: dev_node is null.\n");
+            return -1;
+        }
+        cds_lfht_node_init(&dev_node->node);
+        dev_node->value  = addr_value;
+        dev_node->seqnum = seqnum++;
+        hash             = jhash(&addr_value, sizeof(int), seed);
+        urcu_memb_read_lock();
+        cds_lfht_add(dev_ht, hash, &dev_node->node);
+        urcu_memb_read_unlock();
+    }
+    MSG("INFO: [%d] devices to filter.\n", dev_node->seqnum);
+    /* free JSON parsing data structure */
+    json_value_free(root_val);
+    return 0;
+}
+
+/*主动释放ht的节点内存*/
+void delete_dev_ht_node(void)
+{
+    if (filter_enable == false || white_list_empty == true) {
+        MSG("INFO: no need to free ht node .");
+        return;
+    }
+    int                   ret;
+    struct cds_lfht_node *ht_node;
+    dev_addr_htn_t       *dev_node;
+    printf("removing keys (single key, not duplicates):\n");
+    urcu_memb_read_lock();
+
+    cds_lfht_for_each_entry(dev_ht, &iter, dev_node, node)
+    {
+        ht_node = cds_lfht_iter_get_node(&(iter));
+        ret     = cds_lfht_del(dev_ht, ht_node);
+        if (ret) {
+            // printf(" (concurrently deleted)");
+        } else {
+            free(dev_node);
+        }
+    }
+    urcu_memb_read_unlock();
+}
+
+/*匹配哈希表的dev mac 成功/列表为空返回 0 失败返回 1*/
+static int lorawan_filter(uint32_t mote_addr)
+{
+    if (filter_enable == false) {
+        return 0;
+    }
+    if (white_list_empty == true) {
+        MSG("INFO: empty while list, no mac filter.");
+        return 0;
+    }
+    int             value    = mote_addr;
+    dev_addr_htn_t *dev_node = NULL;
+    unsigned long   hash     = jhash(&value, sizeof(value), seed);
+    bool            is_exist = false;
+    urcu_memb_read_lock();
+    cds_lfht_for_each_entry_duplicate(dev_ht, hash, match, &value, &iter, dev_node, node)
+    {
+        // MSG("DEBUG: filter dev mac :%08X \n", dev_node->value);
+        if ((int)dev_node->value == value) {
+            is_exist = true;
+        }
+    }
+    urcu_memb_read_unlock();
+    if (is_exist) {
+        return 0;
+    }
+    return -1;
 }
 
 static int parse_SX130x_configuration(const char * conf_file) {
@@ -369,16 +651,13 @@ static int parse_SX130x_configuration(const char * conf_file) {
     /* set board configuration */
     memset(&boardconf, 0, sizeof boardconf); /* initialize configuration structure */
     str = json_object_get_string(conf_obj, "com_type");
-    if (str == NULL) {
-        MSG("ERROR: com_type must be configured in %s\n", conf_file);
+    char dev_path[MAX_SPI_PATH] = { 0 };
+    if (get_spidev_path(dev_path) < 0) {
+        MSG("ERROR: Failed to get /sys/class/spi device .\n");
         return -1;
-    } else if (!strncmp(str, "SPI", 3) || !strncmp(str, "spi", 3)) {
-        boardconf.com_type = LGW_COM_SPI;
-    } else if (!strncmp(str, "USB", 3) || !strncmp(str, "usb", 3)) {
-        boardconf.com_type = LGW_COM_USB;
     } else {
-        MSG("ERROR: invalid com type: %s (should be SPI or USB)\n", str);
-        return -1;
+        MSG("INFO: com_path configured with  %s\n", dev_path);
+        boardconf.com_type = LGW_COM_SPI;
     }
     com_type = boardconf.com_type;
     str = json_object_get_string(conf_obj, "com_path");
@@ -1035,12 +1314,22 @@ static int parse_gateway_configuration(const char * conf_file) {
     }
 
     /* gateway unique identifier (aka MAC address) (optional) */
-    str = json_object_get_string(conf_obj, "gateway_ID");
-    if (str != NULL) {
-        sscanf(str, "%llx", &ull);
-        lgwm = ull;
-        MSG("INFO: gateway MAC address is configured to %016llX\n", ull);
+    unsigned char mac_buf[MAX_ETH_MAC_LEN] = { 0 };
+    if (get_local_eth_mac(mac_buf) != 0) {
+        return -1;
     }
+    char id_buf[MAX_GATEWAY_ID + 1] = { 0 };
+    snprintf(id_buf,
+             MAX_GATEWAY_ID + 1,
+             "%02X%02X%02XFFFE%02X%02X%02X",
+             mac_buf[0],
+             mac_buf[1],
+             mac_buf[2],
+             mac_buf[3],
+             mac_buf[4],
+             mac_buf[5]);
+    sscanf(id_buf, "%llx", &ull);
+    lgwm = ull;
 
     /* server hostname or IP address (optional) */
     str = json_object_get_string(conf_obj, "server_address");
@@ -1421,32 +1710,10 @@ static int send_tx_ack(uint8_t token_h, uint8_t token_l, enum jit_error_e error,
 /* -------------------------------------------------------------------------- */
 /* --- MAIN FUNCTION -------------------------------------------------------- */
 
-int main(int argc, char ** argv)
+void *statistics_collection_thread(void *arg)
 {
-    struct sigaction sigact; /* SIGQUIT&SIGINT&SIGTERM signal handling */
-    int i; /* loop variable and temporary variable for return value */
-    int x;
-    int l, m;
-
-    /* configuration file related */
-    const char defaut_conf_fname[] = JSON_CONF_DEFAULT;
-    const char * conf_fname = defaut_conf_fname; /* pointer to a string we won't touch */
-
-    /* threads */
-    pthread_t thrid_up;
-    pthread_t thrid_down;
-    pthread_t thrid_gps;
-    pthread_t thrid_valid;
-    pthread_t thrid_jit;
-    pthread_t thrid_ss;
-
-    /* network socket creation */
-    struct addrinfo hints;
-    struct addrinfo *result; /* store result of getaddrinfo */
-    struct addrinfo *q; /* pointer to move into *result data */
-    char host_name[64];
-    char port_name[64];
-
+    (void)arg;
+    int i;
     /* variables to get local copies of measurements */
     uint32_t cp_nb_rx_rcv;
     uint32_t cp_nb_rx_ok;
@@ -1480,7 +1747,7 @@ int main(int argc, char ** argv)
     /* SX1302 data variables */
     uint32_t trig_tstamp;
     uint32_t inst_tstamp;
-    uint64_t eui;
+
     float temperature;
 
     /* statistics variable */
@@ -1491,233 +1758,6 @@ int main(int argc, char ** argv)
     float rx_nocrc_ratio;
     float up_ack_ratio;
     float dw_ack_ratio;
-
-    /* Parse command line options */
-    while( (i = getopt( argc, argv, "hc:" )) != -1 )
-    {
-        switch( i )
-        {
-        case 'h':
-            usage( );
-            return EXIT_SUCCESS;
-            break;
-
-        case 'c':
-            conf_fname = optarg;
-            break;
-
-        default:
-            printf( "ERROR: argument parsing options, use -h option for help\n" );
-            usage( );
-            return EXIT_FAILURE;
-        }
-    }
-
-    /* display version informations */
-    MSG("*** Packet Forwarder ***\nVersion: " VERSION_STRING "\n");
-    MSG("*** SX1302 HAL library version info ***\n%s\n***\n", lgw_version_info());
-
-    /* display host endianness */
-    #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-        MSG("INFO: Little endian host\n");
-    #elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-        MSG("INFO: Big endian host\n");
-    #else
-        MSG("INFO: Host endianness unknown\n");
-    #endif
-
-    /* load configuration files */
-    if (access(conf_fname, R_OK) == 0) { /* if there is a global conf, parse it  */
-        MSG("INFO: found configuration file %s, parsing it\n", conf_fname);
-        x = parse_SX130x_configuration(conf_fname);
-        if (x != 0) {
-            exit(EXIT_FAILURE);
-        }
-        x = parse_gateway_configuration(conf_fname);
-        if (x != 0) {
-            exit(EXIT_FAILURE);
-        }
-        x = parse_debug_configuration(conf_fname);
-        if (x != 0) {
-            MSG("INFO: no debug configuration\n");
-        }
-    } else {
-        MSG("ERROR: [main] failed to find any configuration file named %s\n", conf_fname);
-        exit(EXIT_FAILURE);
-    }
-
-    /* Start GPS a.s.a.p., to allow it to lock */
-    if (gps_tty_path[0] != '\0') { /* do not try to open GPS device if no path set */
-        i = lgw_gps_enable(gps_tty_path, "ubx7", 0, &gps_tty_fd); /* HAL only supports u-blox 7 for now */
-        if (i != LGW_GPS_SUCCESS) {
-            printf("WARNING: [main] impossible to open %s for GPS sync (check permissions)\n", gps_tty_path);
-            gps_enabled = false;
-            gps_ref_valid = false;
-        } else {
-            printf("INFO: [main] TTY port %s open for GPS synchronization\n", gps_tty_path);
-            gps_enabled = true;
-            gps_ref_valid = false;
-        }
-    }
-
-    /* get timezone info */
-    tzset();
-
-    /* sanity check on configuration variables */
-    // TODO
-
-    /* process some of the configuration variables */
-    net_mac_h = htonl((uint32_t)(0xFFFFFFFF & (lgwm>>32)));
-    net_mac_l = htonl((uint32_t)(0xFFFFFFFF &  lgwm  ));
-
-    /* prepare hints to open network sockets */
-    memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET; /* WA: Forcing IPv4 as AF_UNSPEC makes connection on localhost to fail */
-    hints.ai_socktype = SOCK_DGRAM;
-
-    /* look for server address w/ upstream port */
-    i = getaddrinfo(serv_addr, serv_port_up, &hints, &result);
-    if (i != 0) {
-        MSG("ERROR: [up] getaddrinfo on address %s (PORT %s) returned %s\n", serv_addr, serv_port_up, gai_strerror(i));
-        exit(EXIT_FAILURE);
-    }
-
-    /* try to open socket for upstream traffic */
-    for (q=result; q!=NULL; q=q->ai_next) {
-        sock_up = socket(q->ai_family, q->ai_socktype,q->ai_protocol);
-        if (sock_up == -1) continue; /* try next field */
-        else break; /* success, get out of loop */
-    }
-    if (q == NULL) {
-        MSG("ERROR: [up] failed to open socket to any of server %s addresses (port %s)\n", serv_addr, serv_port_up);
-        i = 1;
-        for (q=result; q!=NULL; q=q->ai_next) {
-            getnameinfo(q->ai_addr, q->ai_addrlen, host_name, sizeof host_name, port_name, sizeof port_name, NI_NUMERICHOST);
-            MSG("INFO: [up] result %i host:%s service:%s\n", i, host_name, port_name);
-            ++i;
-        }
-        exit(EXIT_FAILURE);
-    }
-
-    /* connect so we can send/receive packet with the server only */
-    i = connect(sock_up, q->ai_addr, q->ai_addrlen);
-    if (i != 0) {
-        MSG("ERROR: [up] connect returned %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    freeaddrinfo(result);
-
-    /* look for server address w/ downstream port */
-    i = getaddrinfo(serv_addr, serv_port_down, &hints, &result);
-    if (i != 0) {
-        MSG("ERROR: [down] getaddrinfo on address %s (port %s) returned %s\n", serv_addr, serv_port_down, gai_strerror(i));
-        exit(EXIT_FAILURE);
-    }
-
-    /* try to open socket for downstream traffic */
-    for (q=result; q!=NULL; q=q->ai_next) {
-        sock_down = socket(q->ai_family, q->ai_socktype,q->ai_protocol);
-        if (sock_down == -1) continue; /* try next field */
-        else break; /* success, get out of loop */
-    }
-    if (q == NULL) {
-        MSG("ERROR: [down] failed to open socket to any of server %s addresses (port %s)\n", serv_addr, serv_port_down);
-        i = 1;
-        for (q=result; q!=NULL; q=q->ai_next) {
-            getnameinfo(q->ai_addr, q->ai_addrlen, host_name, sizeof host_name, port_name, sizeof port_name, NI_NUMERICHOST);
-            MSG("INFO: [down] result %i host:%s service:%s\n", i, host_name, port_name);
-            ++i;
-        }
-        exit(EXIT_FAILURE);
-    }
-
-    /* connect so we can send/receive packet with the server only */
-    i = connect(sock_down, q->ai_addr, q->ai_addrlen);
-    if (i != 0) {
-        MSG("ERROR: [down] connect returned %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    freeaddrinfo(result);
-
-    if (com_type == LGW_COM_SPI) {
-        /* Board reset */
-        if (system("./reset_lgw.sh start") != 0) {
-            printf("ERROR: failed to reset SX1302, check your reset_lgw.sh script\n");
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    for (l = 0; l < LGW_IF_CHAIN_NB; l++) {
-        for (m = 0; m < 8; m++) {
-            nb_pkt_log[l][m] = 0;
-        }
-    }
-
-    /* starting the concentrator */
-    i = lgw_start();
-    if (i == LGW_HAL_SUCCESS) {
-        MSG("INFO: [main] concentrator started, packet can now be received\n");
-    } else {
-        MSG("ERROR: [main] failed to start the concentrator\n");
-        exit(EXIT_FAILURE);
-    }
-
-    /* get the concentrator EUI */
-    i = lgw_get_eui(&eui);
-    if (i != LGW_HAL_SUCCESS) {
-        printf("ERROR: failed to get concentrator EUI\n");
-    } else {
-        printf("INFO: concentrator EUI: 0x%016" PRIx64 "\n", eui);
-    }
-
-    /* spawn threads to manage upstream and downstream */
-    i = pthread_create(&thrid_up, NULL, (void * (*)(void *))thread_up, NULL);
-    if (i != 0) {
-        MSG("ERROR: [main] impossible to create upstream thread\n");
-        exit(EXIT_FAILURE);
-    }
-    i = pthread_create(&thrid_down, NULL, (void * (*)(void *))thread_down, NULL);
-    if (i != 0) {
-        MSG("ERROR: [main] impossible to create downstream thread\n");
-        exit(EXIT_FAILURE);
-    }
-    i = pthread_create(&thrid_jit, NULL, (void * (*)(void *))thread_jit, NULL);
-    if (i != 0) {
-        MSG("ERROR: [main] impossible to create JIT thread\n");
-        exit(EXIT_FAILURE);
-    }
-
-    /* spawn thread for background spectral scan */
-    if (spectral_scan_params.enable == true) {
-        i = pthread_create(&thrid_ss, NULL, (void * (*)(void *))thread_spectral_scan, NULL);
-        if (i != 0) {
-            MSG("ERROR: [main] impossible to create Spectral Scan thread\n");
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    /* spawn thread to manage GPS */
-    if (gps_enabled == true) {
-        i = pthread_create(&thrid_gps, NULL, (void * (*)(void *))thread_gps, NULL);
-        if (i != 0) {
-            MSG("ERROR: [main] impossible to create GPS thread\n");
-            exit(EXIT_FAILURE);
-        }
-        i = pthread_create(&thrid_valid, NULL, (void * (*)(void *))thread_valid, NULL);
-        if (i != 0) {
-            MSG("ERROR: [main] impossible to create validation thread\n");
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    /* configure signal handling */
-    sigemptyset(&sigact.sa_mask);
-    sigact.sa_flags = 0;
-    sigact.sa_handler = sig_handler;
-    sigaction(SIGQUIT, &sigact, NULL); /* Ctrl-\ */
-    sigaction(SIGINT, &sigact, NULL); /* Ctrl-C */
-    sigaction(SIGTERM, &sigact, NULL); /* default "kill" command */
-
     /* main loop task : statistics collection */
     while (!exit_sig && !quit_sig) {
         /* wait for next reporting interval */
@@ -1891,8 +1931,286 @@ int main(int argc, char ** argv)
         report_ready = true;
         pthread_mutex_unlock(&mx_stat_rep);
     }
+    return NULL;
+}
+
+int main(int argc, char ** argv)
+{
+    struct sigaction sigact; /* SIGQUIT&SIGINT&SIGTERM signal handling */
+    int i; /* loop variable and temporary variable for return value */
+    int x;
+    int l, m;
+
+    /* configuration file related */
+    const char defaut_conf_fname[] = JSON_CONF_DEFAULT;
+    const char * conf_fname = defaut_conf_fname; /* pointer to a string we won't touch */
+
+    /* threads */
+    pthread_t thrid_up;
+    pthread_t thrid_down;
+    pthread_t thrid_gps;
+    pthread_t thrid_valid;
+    pthread_t thrid_jit;
+    pthread_t thrid_ss;
+
+    /* network socket creation */
+    struct addrinfo hints;
+    struct addrinfo *result; /* store result of getaddrinfo */
+    struct addrinfo *q; /* pointer to move into *result data */
+    char host_name[64];
+    char port_name[64];
+    uint64_t eui;
+
+    /* Parse command line options */
+    while( (i = getopt( argc, argv, "hc:" )) != -1 )
+    {
+        switch( i )
+        {
+        case 'h':
+            usage( );
+            return EXIT_SUCCESS;
+            break;
+
+        case 'c':
+            conf_fname = optarg;
+            break;
+
+        default:
+            printf( "ERROR: argument parsing options, use -h option for help\n" );
+            usage( );
+            return EXIT_FAILURE;
+        }
+    }
+
+    urcu_memb_register_thread();
+    /* display version informations */
+    MSG("*** Packet Forwarder ***\nVersion: " VERSION_STRING "\n");
+    MSG("*** SX1302 HAL library version info ***\n%s\n***\n", lgw_version_info());
+
+    /* display host endianness */
+    #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+        MSG("INFO: Little endian host\n");
+    #elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        MSG("INFO: Big endian host\n");
+    #else
+        MSG("INFO: Host endianness unknown\n");
+    #endif
+
+    /* load configuration files */
+    if (access(conf_fname, R_OK) == 0) { /* if there is a global conf, parse it  */
+        MSG("INFO: found configuration file %s, parsing it\n", conf_fname);
+        x = parse_SX130x_configuration(conf_fname);
+        if (x != 0) {
+            exit(EXIT_FAILURE);
+        }
+        x = parse_gateway_configuration(conf_fname);
+        if (x != 0) {
+            exit(EXIT_FAILURE);
+        }
+        x = parse_debug_configuration(conf_fname);
+        if (x != 0) {
+            MSG("INFO: no debug configuration\n");
+        }
+    } else {
+        MSG("ERROR: [main] failed to find any configuration file named %s\n", conf_fname);
+        exit(EXIT_FAILURE);
+    }
+
+    if (access(FILTER_CONF_PATH_DEFAULT, R_OK) == 0) {
+        MSG("INFO: found configuration file %s, parsing it\n", FILTER_CONF_PATH_DEFAULT);
+        x = parse_filter_configuration();
+        if (x != 0) {
+            MSG("WARN: parse lorawan filter failed.\n");
+        }
+    } else {
+        MSG("ERROR: [main] failed to find any configuration file named %s\n",
+            FILTER_CONF_PATH_DEFAULT);
+    }
+
+    /* Start GPS a.s.a.p., to allow it to lock */
+    if (gps_tty_path[0] != '\0') { /* do not try to open GPS device if no path set */
+        i = lgw_gps_enable(gps_tty_path, "ubx7", 0, &gps_tty_fd); /* HAL only supports u-blox 7 for now */
+        if (i != LGW_GPS_SUCCESS) {
+            printf("WARNING: [main] impossible to open %s for GPS sync (check permissions)\n", gps_tty_path);
+            gps_enabled = false;
+            gps_ref_valid = false;
+        } else {
+            printf("INFO: [main] TTY port %s open for GPS synchronization\n", gps_tty_path);
+            gps_enabled = true;
+            gps_ref_valid = false;
+        }
+    }
+
+    /* get timezone info */
+    tzset();
+
+    /* sanity check on configuration variables */
+    // TODO
+
+    /* process some of the configuration variables */
+    net_mac_h = htonl((uint32_t)(0xFFFFFFFF & (lgwm>>32)));
+    net_mac_l = htonl((uint32_t)(0xFFFFFFFF &  lgwm  ));
+
+    /* prepare hints to open network sockets */
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET; /* WA: Forcing IPv4 as AF_UNSPEC makes connection on localhost to fail */
+    hints.ai_socktype = SOCK_DGRAM;
+
+    /* look for server address w/ upstream port */
+    i = getaddrinfo(serv_addr, serv_port_up, &hints, &result);
+    if (i != 0) {
+        MSG("ERROR: [up] getaddrinfo on address %s (PORT %s) returned %s\n", serv_addr, serv_port_up, gai_strerror(i));
+        exit(EXIT_FAILURE);
+    }
+
+    /* try to open socket for upstream traffic */
+    for (q=result; q!=NULL; q=q->ai_next) {
+        sock_up = socket(q->ai_family, q->ai_socktype,q->ai_protocol);
+        if (sock_up == -1) continue; /* try next field */
+        else break; /* success, get out of loop */
+    }
+    if (q == NULL) {
+        MSG("ERROR: [up] failed to open socket to any of server %s addresses (port %s)\n", serv_addr, serv_port_up);
+        i = 1;
+        for (q=result; q!=NULL; q=q->ai_next) {
+            getnameinfo(q->ai_addr, q->ai_addrlen, host_name, sizeof host_name, port_name, sizeof port_name, NI_NUMERICHOST);
+            MSG("INFO: [up] result %i host:%s service:%s\n", i, host_name, port_name);
+            ++i;
+        }
+        exit(EXIT_FAILURE);
+    }
+
+    /* connect so we can send/receive packet with the server only */
+    i = connect(sock_up, q->ai_addr, q->ai_addrlen);
+    if (i != 0) {
+        MSG("ERROR: [up] connect returned %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    freeaddrinfo(result);
+
+    /* look for server address w/ downstream port */
+    i = getaddrinfo(serv_addr, serv_port_down, &hints, &result);
+    if (i != 0) {
+        MSG("ERROR: [down] getaddrinfo on address %s (port %s) returned %s\n", serv_addr, serv_port_down, gai_strerror(i));
+        exit(EXIT_FAILURE);
+    }
+
+    /* try to open socket for downstream traffic */
+    for (q=result; q!=NULL; q=q->ai_next) {
+        sock_down = socket(q->ai_family, q->ai_socktype,q->ai_protocol);
+        if (sock_down == -1) continue; /* try next field */
+        else break; /* success, get out of loop */
+    }
+    if (q == NULL) {
+        MSG("ERROR: [down] failed to open socket to any of server %s addresses (port %s)\n", serv_addr, serv_port_down);
+        i = 1;
+        for (q=result; q!=NULL; q=q->ai_next) {
+            getnameinfo(q->ai_addr, q->ai_addrlen, host_name, sizeof host_name, port_name, sizeof port_name, NI_NUMERICHOST);
+            MSG("INFO: [down] result %i host:%s service:%s\n", i, host_name, port_name);
+            ++i;
+        }
+        exit(EXIT_FAILURE);
+    }
+
+    /* connect so we can send/receive packet with the server only */
+    i = connect(sock_down, q->ai_addr, q->ai_addrlen);
+    if (i != 0) {
+        MSG("ERROR: [down] connect returned %s\n", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    freeaddrinfo(result);
+
+    if (com_type == LGW_COM_SPI) {
+        /* Board reset */
+        if (system("./reset_lgw.sh start") != 0) {
+            printf("ERROR: failed to reset SX1302, check your reset_lgw.sh script\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    for (l = 0; l < LGW_IF_CHAIN_NB; l++) {
+        for (m = 0; m < 8; m++) {
+            nb_pkt_log[l][m] = 0;
+        }
+    }
+
+    /* starting the concentrator */
+    i = lgw_start();
+    if (i == LGW_HAL_SUCCESS) {
+        MSG("INFO: [main] concentrator started, packet can now be received\n");
+    } else {
+        MSG("ERROR: [main] failed to start the concentrator\n");
+        exit(EXIT_FAILURE);
+    }
+
+    /* get the concentrator EUI */
+    i = lgw_get_eui(&eui);
+    if (i != LGW_HAL_SUCCESS) {
+        printf("ERROR: failed to get concentrator EUI\n");
+    } else {
+        printf("INFO: concentrator EUI: 0x%016" PRIx64 "\n", eui);
+    }
+
+    /* spawn threads to manage upstream and downstream */
+    i = pthread_create(&thrid_up, NULL, (void * (*)(void *))thread_up, NULL);
+    if (i != 0) {
+        MSG("ERROR: [main] impossible to create upstream thread\n");
+        exit(EXIT_FAILURE);
+    }
+    i = pthread_create(&thrid_down, NULL, (void * (*)(void *))thread_down, NULL);
+    if (i != 0) {
+        MSG("ERROR: [main] impossible to create downstream thread\n");
+        exit(EXIT_FAILURE);
+    }
+    i = pthread_create(&thrid_jit, NULL, (void * (*)(void *))thread_jit, NULL);
+    if (i != 0) {
+        MSG("ERROR: [main] impossible to create JIT thread\n");
+        exit(EXIT_FAILURE);
+    }
+
+    /* spawn thread for background spectral scan */
+    if (spectral_scan_params.enable == true) {
+        i = pthread_create(&thrid_ss, NULL, (void * (*)(void *))thread_spectral_scan, NULL);
+        if (i != 0) {
+            MSG("ERROR: [main] impossible to create Spectral Scan thread\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    /* spawn thread to manage GPS */
+    if (gps_enabled == true) {
+        i = pthread_create(&thrid_gps, NULL, (void * (*)(void *))thread_gps, NULL);
+        if (i != 0) {
+            MSG("ERROR: [main] impossible to create GPS thread\n");
+            exit(EXIT_FAILURE);
+        }
+        i = pthread_create(&thrid_valid, NULL, (void * (*)(void *))thread_valid, NULL);
+        if (i != 0) {
+            MSG("ERROR: [main] impossible to create validation thread\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    i = pthread_create(&stat_tid, NULL, statistics_collection_thread, NULL);
+    if (i != 0) {
+        MSG("ERROR: [main] impossible to create JIT thread\n");
+        exit(EXIT_FAILURE);
+    }
+
+    /* configure signal handling */
+    sigemptyset(&sigact.sa_mask);
+    sigact.sa_flags = 0;
+    sigact.sa_handler = sig_handler;
+    sigaction(SIGQUIT, &sigact, NULL); /* Ctrl-\ */
+    sigaction(SIGINT, &sigact, NULL); /* Ctrl-C */
+    sigaction(SIGTERM, &sigact, NULL); /* default "kill" command */
+
 
     /* wait for all threads with a COM with the concentrator board to finish (1 fetch cycle max) */
+    i = pthread_join(stat_tid, NULL);
+    if (i != 0) {
+        printf("ERROR: failed to join upstream thread with %d - %s\n", i, strerror(errno));
+    }
     i = pthread_join(thrid_up, NULL);
     if (i != 0) {
         printf("ERROR: failed to join upstream thread with %d - %s\n", i, strerror(errno));
@@ -1944,7 +2262,8 @@ int main(int argc, char ** argv)
             exit(EXIT_FAILURE);
         }
     }
-
+    delete_dev_ht_node();
+    urcu_memb_unregister_thread();
     MSG("INFO: Exiting packet forwarder program\n");
     exit(EXIT_SUCCESS);
 }
@@ -2071,6 +2390,9 @@ void thread_up(void) {
             } else {
                 mote_addr = 0;
                 mote_fcnt = 0;
+            }
+            if (lorawan_filter(mote_addr) < 0) {
+                continue;
             }
 
             /* basic packet filtering */

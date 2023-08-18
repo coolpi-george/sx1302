@@ -2,6 +2,7 @@
 */obj/
 *.swp
 bin/
+.vscode/
 libloragw/inc/config.h
 libloragw/test_loragw_*
 packet_forwarder/lora_pkt_fwd
