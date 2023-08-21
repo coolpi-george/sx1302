@@ -52,6 +52,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 /* --- DEBUG CONSTANTS ------------------------------------------------------ */
 
 #define HAL_DEBUG_FILE_LOG  0
+#define USE_I2C_SENSOR 0
 
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE MACROS ------------------------------------------------------- */
@@ -202,13 +203,14 @@ static lgw_context_t lgw_context = {
 /* File handle to write debug logs */
 FILE * log_file = NULL;
 
+#if USE_I2C_SENSOR
 /* I2C temperature sensor handles */
 static int     ts_fd = -1;
 static uint8_t ts_addr = 0xFF;
 
 /* I2C AD5338 handles */
 static int     ad_fd = -1;
-
+#endif
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE FUNCTIONS DECLARATION ---------------------------------------- */
 
@@ -297,19 +299,14 @@ static int remove_pkt(struct lgw_pkt_rx_s * p, uint8_t * nb_pkt, uint8_t pkt_ind
 
 /* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 
-int compare_pkt_tmst(const void *a, const void *b, void *arg)
+int compare_pkt_tmst(const void *a, const void *b)
 {
     struct lgw_pkt_rx_s *p = (struct lgw_pkt_rx_s *)a;
     struct lgw_pkt_rx_s *q = (struct lgw_pkt_rx_s *)b;
-    int *counter = (int *)arg;
     int p_count, q_count;
 
     p_count = p->count_us;
     q_count = q->count_us;
-
-    if (p_count > q_count) {
-        *counter = *counter + 1;
-    }
 
     return (p_count - q_count);
 }
@@ -323,7 +320,6 @@ static int merge_packets(struct lgw_pkt_rx_s * p, uint8_t * nb_pkt) {
     int pkt_idx;
 #endif
     bool dup_restart = false;
-    int counter_qsort_swap = 0;
 
     /* Check input parameters */
     CHECK_NULL(p);
@@ -417,8 +413,7 @@ static int merge_packets(struct lgw_pkt_rx_s * p, uint8_t * nb_pkt) {
     }
 
     /* Sort the packet array by ascending counter_us value */
-    qsort_r(p, cpt, sizeof(p[0]), compare_pkt_tmst, &counter_qsort_swap);
-    DEBUG_PRINTF("%d elements swapped during sorting...\n", counter_qsort_swap);
+    qsort(p, cpt, sizeof(p[0]), compare_pkt_tmst);
 
     /* --------------------------------------------- */
     /* ---------- For Debug only - START ----------- */
@@ -1092,6 +1087,7 @@ int lgw_start(void) {
     /* Configure the pseudo-random generator (For Debug) */
     dbg_init_random();
 
+#if USE_I2C_SENSOR
     if (CONTEXT_COM_TYPE == LGW_COM_SPI) {
         /* Find the temperature sensor on the known supported ports */
         for (i = 0; i < (int)(sizeof I2C_PORT_TEMP_SENSOR); i++) {
@@ -1143,6 +1139,7 @@ int lgw_start(void) {
             printf("INFO: AD5338R: Set DAC output to 0x%02X 0x%02X\n", (uint8_t)VOLTAGE2HEX_H(0), (uint8_t)VOLTAGE2HEX_L(0));
         }
     }
+#endif
 
     /* Connect to the external sx1261 for LBT or Spectral Scan */
     if (CONTEXT_SX1261.enable == true) {
@@ -1220,7 +1217,7 @@ int lgw_stop(void) {
         printf("ERROR: failed to disconnect concentrator\n");
         err = LGW_HAL_ERROR;
     }
-
+#if USE_I2C_SENSOR
     if (CONTEXT_COM_TYPE == LGW_COM_SPI) {
         DEBUG_MSG("INFO: Closing I2C for temperature sensor\n");
         x = i2c_linuxdev_close(ts_fd);
@@ -1238,6 +1235,7 @@ int lgw_stop(void) {
             }
         }
     }
+#endif
 
     CONTEXT_STARTED = false;
 
@@ -1410,7 +1408,7 @@ int lgw_send(struct lgw_pkt_tx_s * pkt_data) {
         printf("ERROR: INVALID TX MODULATION\n");
         return LGW_HAL_ERROR;
     }
-
+#if USE_I2C_SENSOR
     /* Set PA gain with AD5338R when using full duplex CN490 ref design */
     if (CONTEXT_BOARD.full_duplex == true) {
         uint8_t volt_val[AD5338R_CMD_SIZE] = {0x39, VOLTAGE2HEX_H(2.51), VOLTAGE2HEX_L(2.51)}; /* set to 2.51V */
@@ -1421,6 +1419,7 @@ int lgw_send(struct lgw_pkt_tx_s * pkt_data) {
         }
         printf("INFO: AD5338R: Set DAC output to 0x%02X 0x%02X\n", (uint8_t)VOLTAGE2HEX_H(2.51), (uint8_t)VOLTAGE2HEX_L(2.51));
     }
+#endif
 
     /* Start Listen-Before-Talk */
     if (CONTEXT_SX1261.lbt_conf.enable == true) {
@@ -1594,7 +1593,7 @@ int lgw_get_temperature(float* temperature) {
     DEBUG_PRINTF(" --- %s\n", "IN");
 
     CHECK_NULL(temperature);
-
+#if USE_I2C_SENSOR
     switch (CONTEXT_COM_TYPE) {
         case LGW_COM_SPI:
             err = stts751_get_temperature(ts_fd, ts_addr, temperature);
@@ -1606,7 +1605,10 @@ int lgw_get_temperature(float* temperature) {
             printf("ERROR(%s:%d): wrong communication type (SHOULD NOT HAPPEN)\n", __FUNCTION__, __LINE__);
             break;
     }
-
+#else
+    err = LGW_I2C_SUCCESS;
+    *temperature = 0.0;
+#endif
     DEBUG_PRINTF(" --- %s\n", "OUT");
 
     return err;

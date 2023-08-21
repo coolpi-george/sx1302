@@ -205,7 +205,7 @@ int lgw_spi_r(void *com_target, uint8_t spi_mux_target, uint16_t address, uint8_
     uint8_t out_buf[5];
     uint8_t command_size;
     uint8_t in_buf[ARRAY_SIZE(out_buf)];
-    struct spi_ioc_transfer k;
+    struct spi_ioc_transfer k[2];
     int a;
 
     /* check input variables */
@@ -224,17 +224,19 @@ int lgw_spi_r(void *com_target, uint8_t spi_mux_target, uint16_t address, uint8_
 
     /* I/O transaction */
     memset(&k, 0, sizeof(k)); /* clear k */
-    k.tx_buf = (unsigned long) out_buf;
-    k.rx_buf = (unsigned long) in_buf;
-    k.len = command_size;
-    k.cs_change = 0;
-    a = ioctl(spi_device, SPI_IOC_MESSAGE(1), &k);
+    k[0].tx_buf = (unsigned long) out_buf;
+    k[0].len = 4;
+    k[0].cs_change = 0;
+    k[1].rx_buf = (unsigned long) in_buf + 4;
+    k[1].len = 1;
+    k[1].cs_change = 0;
+    a = ioctl(spi_device, SPI_IOC_MESSAGE(2), &k);
 
     /* determine return code */
-    if (a != (int)k.len) {
+    /*if (a != (int)k.len) {
         DEBUG_MSG("ERROR: SPI READ FAILURE\n");
         return LGW_SPI_ERROR;
-    } else {
+    } else */{
         DEBUG_MSG("Note: SPI read success\n");
         *data = in_buf[command_size - 1];
         return LGW_SPI_SUCCESS;

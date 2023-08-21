@@ -44,6 +44,8 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #include <urcu/urcu-memb.h> /* RCU flavor */
 #include <net/if.h>
 #include <sys/socket.h>     /* socket specific definitions */
+#include <sys/ioctl.h>
+#include <linux/if.h>
 #include <netinet/in.h>     /* INET constants and stuff */
 #include <arpa/inet.h>      /* IP address conversion stuff */
 #include <netdb.h>          /* gai_strerror */
@@ -2257,7 +2259,7 @@ int main(int argc, char ** argv)
 
     if (com_type == LGW_COM_SPI) {
         /* Board reset */
-        if (system("./reset_lgw.sh stop") != 0) {
+        if (system("sh /usr/bin/reset_lgw.sh stop") != 0) {
             printf("ERROR: failed to reset SX1302, check your reset_lgw.sh script\n");
             exit(EXIT_FAILURE);
         }
