@@ -594,7 +594,6 @@ static int lorawan_filter(uint32_t mote_addr)
     urcu_memb_read_lock();
     cds_lfht_for_each_entry_duplicate(dev_ht, hash, match, &value, &iter, dev_node, node)
     {
-        MSG("INFO: [up] filter dev mac :%08X, give up packet.\n", dev_node->value);
         if ((int)dev_node->value == value) {
             is_exist = true;
             break;
@@ -604,6 +603,7 @@ static int lorawan_filter(uint32_t mote_addr)
     if (is_exist) {
         return 0;
     }
+    MSG("INFO: [up] Filter dev mac :%08X\n", mote_addr);
     return -1;
 }
 
