@@ -521,7 +521,7 @@ int parse_filter_configuration(void)
 
     for (int i = 0; i < (int)json_array_get_count(conf_array); ++i) {
         str = json_array_get_string(conf_array, i);
-        // MSG("DEBUG: while list dev: %s \n", str);
+        MSG("INFO: While list dev: %s \n", str);
         memset(value_array, 0, sizeof(value_array));
         if (dev_addr_str2hex(value_array, str, strlen(str)) == -1) {
             MSG("ERROR: dev_addr[%s]str2hex is failed.\n", str);
@@ -539,7 +539,8 @@ int parse_filter_configuration(void)
         }
         cds_lfht_node_init(&dev_node->node);
         dev_node->value  = addr_value;
-        dev_node->seqnum = seqnum++;
+        ++seqnum;
+        dev_node->seqnum = seqnum;
         hash             = jhash(&addr_value, sizeof(int), seed);
         urcu_memb_read_lock();
         cds_lfht_add(dev_ht, hash, &dev_node->node);
