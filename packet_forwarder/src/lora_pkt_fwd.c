@@ -178,7 +178,7 @@ enum network_interface {
     ETHERNET = 0x01,
     LTE_4G,
 };
-int net_state = -1;
+int origin_network = -1;
 
 /* packets filtering configuration variables */
 static bool fwd_valid_pkt = true; /* packets with PAYLOAD CRC OK are forwarded */
@@ -392,16 +392,16 @@ int get_current_network_interface(void)
     printf("INFO: Network Interface:[%s]\n", interface);
     // 判断当前网络接口类型
     if (strcmp(interface, "usb0") == 0 || strcmp(interface, "wwan0") == 0) {
-        printf("INFO: 当前OpenWrt系统正在使用4G网络接口联网\n");
-        net_state = LTE_4G;
+        printf("INFO: Current interface is LTE 4G.\n");
+        return LTE_4G;
     } else if (strstr(interface, "eth"))  {
-        printf("INFO: 当前OpenWrt系统正在使用以太网网络接口联网\n");
-        net_state = ETHERNET;
+        printf("INFO: Current interface is ETHERNET.\n");
+        return ETHERNET;
     } else {
-        printf("INFO: 当前OpenWrt系统正在使用其他网络接口联网\n");
+        printf("INFO: Other network interfaces.\n");
     }
 
-    return 0;
+    return -1;
 }
 
 int get_spidev_path(char *spi_name)
@@ -1816,6 +1816,8 @@ void *statistics_collection_thread(void *arg)
     float rx_nocrc_ratio;
     float up_ack_ratio;
     float dw_ack_ratio;
+
+    int current_network = -1;
     /* main loop task : statistics collection */
     while (!exit_sig && !quit_sig) {
         /* wait for next reporting interval */
@@ -1988,6 +1990,16 @@ void *statistics_collection_thread(void *arg)
         }
         report_ready = true;
         pthread_mutex_unlock(&mx_stat_rep);
+
+        current_network = get_current_network_interface();
+        /* 网络状况（默认路由）发生改变 */
+        if (current_network != origin_network) {
+            printf("ERROR: The network interface has changed, fwd will be restarted.\n");
+            i = system("/etc/lorawan_scripts/lorawan_mode start &");
+            if (i < 0) {
+                /* do nothing */
+            }
+        }
     }
     return NULL;
 }
@@ -2103,8 +2115,8 @@ int main(int argc, char ** argv)
     tzset();
 
     /* get network interface */
-    i = get_current_network_interface();
-    if (i < 0) {
+    origin_network = get_current_network_interface();
+    if (origin_network < 0) {
         MSG("WARN: Failed to get network interface.\n");
     }
 
