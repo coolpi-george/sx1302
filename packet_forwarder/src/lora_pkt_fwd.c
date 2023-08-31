@@ -170,6 +170,16 @@ time_t seed = 0;
 struct cds_lfht_iter iter = { 0 };
 pthread_t stat_tid;
 
+/* network interface */
+
+#define MAX_BUF_SIZE 1024
+
+enum network_interface {
+    ETHERNET = 0x01,
+    LTE_4G,
+};
+int net_state = -1;
+
 /* packets filtering configuration variables */
 static bool fwd_valid_pkt = true; /* packets with PAYLOAD CRC OK are forwarded */
 static bool fwd_error_pkt = false; /* packets with PAYLOAD CRC ERROR are NOT forwarded */
@@ -354,6 +364,44 @@ static void sig_handler(int sigio) {
     // 直接关闭，不然主进程30s间隔很难退出
     pthread_cancel(stat_tid);
     return;
+}
+
+int get_current_network_interface(void)
+{
+    FILE *fp;
+    char buf[MAX_BUF_SIZE];
+    char interface[50];
+
+    // 打开保存网络接口信息的文件
+    fp = fopen("/proc/net/route", "r");
+    if (fp == NULL) {
+        perror("fopen");
+        return -1;
+    }
+
+    // 读取文件内容并查找默认路由
+    while (fgets(buf, MAX_BUF_SIZE, fp)) {
+        if (strstr(buf, "\t00000000") != NULL) {
+            sscanf(buf, "%s", interface);
+            break;
+        }
+    }
+
+    // 关闭文件
+    fclose(fp);
+    printf("INFO: Network Interface:[%s]\n", interface);
+    // 判断当前网络接口类型
+    if (strcmp(interface, "usb0") == 0 || strcmp(interface, "wwan0") == 0) {
+        printf("INFO: 当前OpenWrt系统正在使用4G网络接口联网\n");
+        net_state = LTE_4G;
+    } else if (strstr(interface, "eth"))  {
+        printf("INFO: 当前OpenWrt系统正在使用以太网网络接口联网\n");
+        net_state = ETHERNET;
+    } else {
+        printf("INFO: 当前OpenWrt系统正在使用其他网络接口联网\n");
+    }
+
+    return 0;
 }
 
 int get_spidev_path(char *spi_name)
@@ -2053,6 +2101,12 @@ int main(int argc, char ** argv)
 
     /* get timezone info */
     tzset();
+
+    /* get network interface */
+    i = get_current_network_interface();
+    if (i < 0) {
+        MSG("WARN: Failed to get network interface.\n");
+    }
 
     /* sanity check on configuration variables */
     // TODO
