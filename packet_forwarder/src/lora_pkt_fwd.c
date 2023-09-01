@@ -392,10 +392,8 @@ int get_current_network_interface(void)
     printf("INFO: Network Interface:[%s]\n", interface);
     // 判断当前网络接口类型
     if (strcmp(interface, "usb0") == 0 || strcmp(interface, "wwan0") == 0) {
-        printf("INFO: Current interface is LTE 4G.\n");
         return LTE_4G;
     } else if (strstr(interface, "eth"))  {
-        printf("INFO: Current interface is ETHERNET.\n");
         return ETHERNET;
     } else {
         printf("INFO: Other network interfaces.\n");
@@ -2114,12 +2112,15 @@ int main(int argc, char ** argv)
     /* get timezone info */
     tzset();
 
-    /* get network interface */
+    /* get Current Destination default route */
     origin_network = get_current_network_interface();
-    if (origin_network < 0) {
+    if (origin_network == LTE_4G) {
+        printf("INFO: Current Destination default route is LTE 4G.\n");
+    } else if (origin_network == ETHERNET) {
+        printf("INFO: Current Destination default route is ETHERNET.\n");
+    } else {
         MSG("WARN: Failed to get network interface.\n");
     }
-
     /* sanity check on configuration variables */
     // TODO
 
@@ -3616,6 +3617,7 @@ void thread_down(void) {
     MSG("\nINFO: End of downstream thread\n");
     current_network = get_current_network_interface();
     if (origin_network != current_network) {
+        printf("WARN: Current network interface has been changed.\n");
         i = system("sleep 1 && /etc/lorawan_scripts/lorawan_mode start &");
         if (i < 0) {
             /* do nothing */
