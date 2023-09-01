@@ -2989,6 +2989,8 @@ void thread_down(void) {
     int32_t warning_value = 0;
     uint8_t tx_lut_idx = 0;
 
+    int current_network = -1;
+
     /* set downstream socket RX timeout */
     i = setsockopt(sock_down, SOL_SOCKET, SO_RCVTIMEO, (void *)&pull_timeout, sizeof pull_timeout);
     if (i != 0) {
@@ -3612,6 +3614,14 @@ void thread_down(void) {
         }
     }
     MSG("\nINFO: End of downstream thread\n");
+    current_network = get_current_network_interface();
+    if (origin_network != current_network) {
+        i = system("sleep 1 && /etc/lorawan_scripts/lorawan_mode start &");
+        if (i < 0) {
+            /* do nothing */
+        }
+        exit(EXIT_SUCCESS);
+    }
 }
 
 void print_tx_status(uint8_t tx_status) {
