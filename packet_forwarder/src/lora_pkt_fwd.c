@@ -175,7 +175,9 @@ pthread_t stat_tid;
 #define MAX_BUF_SIZE 1024
 
 enum network_interface {
-    ETHERNET = 0x01,
+    NETWORK_RESET = -2,
+    NETWORK_UNKNOW,
+    ETHERNET,
     LTE_4G,
 };
 int origin_network = -1;
@@ -366,7 +368,7 @@ static void sig_handler(int sigio) {
     return;
 }
 
-int get_current_network_interface(void)
+static int get_current_network_interface(void)
 {
     FILE *fp;
     char buf[MAX_BUF_SIZE];
@@ -386,9 +388,12 @@ int get_current_network_interface(void)
             break;
         }
     }
-
     // 关闭文件
     fclose(fp);
+    if (interface == NULL) {
+        printf("INFO: Network resetting...\n");
+        return NETWORK_RESET;
+    }
     printf("INFO: Network Interface:[%s]\n", interface);
     // 判断当前网络接口类型
     if (strcmp(interface, "usb0") == 0 || strcmp(interface, "wwan0") == 0) {
@@ -399,7 +404,7 @@ int get_current_network_interface(void)
         printf("INFO: Other network interfaces.\n");
     }
 
-    return -1;
+    return NETWORK_UNKNOW;
 }
 
 int get_spidev_path(char *spi_name)
@@ -1991,12 +1996,18 @@ void *statistics_collection_thread(void *arg)
 
         current_network = get_current_network_interface();
         /* 网络状况（默认路由）发生改变 */
-        if (current_network != origin_network) {
+        if (current_network != origin_network && current_network != NETWORK_RESET) {
             printf("ERROR: The network interface has changed, fwd will be restarted.\n");
-            i = system("/etc/lorawan_scripts/lorawan_mode start &");
+            const char *cmd = "\
+                ip route flush cache &\n\
+                sleep 2  &\n\
+                /etc/lorawan_scripts/lorawan_mode start &\n\
+                ";
+            i = system(cmd);
             if (i < 0) {
                 /* do nothing */
             }
+            exit(EXIT_FAILURE);
         }
     }
     return NULL;
@@ -3616,13 +3627,18 @@ void thread_down(void) {
     }
     MSG("\nINFO: End of downstream thread\n");
     current_network = get_current_network_interface();
-    if (origin_network != current_network) {
-        printf("WARN: Current network interface has been changed.\n");
-        i = system("sleep 1 && /etc/lorawan_scripts/lorawan_mode start &");
+    if (current_network != origin_network && current_network != NETWORK_RESET) {
+        printf("ERROR: The network interface has changed, fwd will be restarted.\n");
+        const char *cmd = "\
+                ip route flush cache &\n\
+                sleep 2  &\n\
+                /etc/lorawan_scripts/lorawan_mode start &\n\
+                ";
+        i = system(cmd);
         if (i < 0) {
             /* do nothing */
         }
-        exit(EXIT_SUCCESS);
+        exit(EXIT_FAILURE);
     }
 }
 
