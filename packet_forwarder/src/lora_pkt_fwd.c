@@ -1997,22 +1997,20 @@ void *statistics_collection_thread(void *arg)
         current_network = get_current_network_interface();
         /* 网络状况（默认路由）发生改变 */
         if (current_network != origin_network && current_network != NETWORK_RESET) {
-        printf("ERROR: The network interface has changed, fwd will be restarted.\n");
-        if (origin_network == LTE_4G) {
-            (void)system("ip route flush cache && /etc/init.d/network restart");
-            char *script = "\
-                    sleep 15 &\n\
-                    /etc/lorawan_scripts/lorawan_mode start &\n\
-                    ";
-            (void)system(script);
-        } else if (origin_network == ETHERNET) { // 以太网切4G不需要自己重启网络
-            char *script = "\
-                    ip route flush cache &\n\
-                    /etc/lorawan_scripts/lorawan_mode start &\n\
-                    ";
-            (void)system(script);
-        }
-        exit(EXIT_FAILURE);
+            printf("ERROR: The network interface has changed, fwd will be restarted.\n");
+            if (origin_network == LTE_4G) {
+                (void)system("ip route flush cache && /etc/init.d/network restart");
+                printf("INFO: waiting network reset finish....\n");
+                sleep(15);
+                (void)system("/etc/lorawan_scripts/lorawan_mode start &");
+            } else if (origin_network == ETHERNET) { // 以太网切4G不需要自己重启网络
+                char *script = "\
+                        ip route flush cache &\n\
+                        /etc/lorawan_scripts/lorawan_mode start &\n\
+                        ";
+                (void)system(script);
+            }
+            exit(EXIT_FAILURE);
         }
     }
     return NULL;
@@ -3636,11 +3634,9 @@ void thread_down(void) {
         printf("ERROR: The network interface has changed, fwd will be restarted.\n");
         if (origin_network == LTE_4G) {
             (void)system("ip route flush cache && /etc/init.d/network restart");
-            char *script = "\
-                    sleep 15 &\n\
-                    /etc/lorawan_scripts/lorawan_mode start &\n\
-                    ";
-            (void)system(script);
+            printf("INFO: waiting network reset finish....\n");
+            sleep(15);
+            (void)system("/etc/lorawan_scripts/lorawan_mode start &");
         } else if (origin_network == ETHERNET) { // 以太网切4G不需要自己重启网络
             char *script = "\
                     ip route flush cache &\n\
