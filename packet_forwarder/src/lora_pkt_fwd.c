@@ -2001,7 +2001,7 @@ void *statistics_collection_thread(void *arg)
         if (origin_network == LTE_4G) {
             (void)system("ip route flush cache && /etc/init.d/network restart");
             char *script = "\
-                    sleep 5 &\n\
+                    sleep 15 &\n\
                     /etc/lorawan_scripts/lorawan_mode start &\n\
                     ";
             (void)system(script);
@@ -3637,7 +3637,7 @@ void thread_down(void) {
         if (origin_network == LTE_4G) {
             (void)system("ip route flush cache && /etc/init.d/network restart");
             char *script = "\
-                    sleep 5 &\n\
+                    sleep 15 &\n\
                     /etc/lorawan_scripts/lorawan_mode start &\n\
                     ";
             (void)system(script);
