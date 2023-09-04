@@ -170,6 +170,18 @@ time_t seed = 0;
 struct cds_lfht_iter iter = { 0 };
 pthread_t stat_tid;
 
+/* network interface */
+
+#define MAX_BUF_SIZE 1024
+
+enum network_interface {
+    NETWORK_RESET = -2,
+    NETWORK_UNKNOW,
+    ETHERNET,
+    LTE_4G,
+};
+int origin_network = -1;
+
 /* packets filtering configuration variables */
 static bool fwd_valid_pkt = true; /* packets with PAYLOAD CRC OK are forwarded */
 static bool fwd_error_pkt = false; /* packets with PAYLOAD CRC ERROR are NOT forwarded */
@@ -354,6 +366,45 @@ static void sig_handler(int sigio) {
     // 直接关闭，不然主进程30s间隔很难退出
     pthread_cancel(stat_tid);
     return;
+}
+
+static int get_current_network_interface(void)
+{
+    FILE *fp;
+    char buf[MAX_BUF_SIZE];
+    char interface[50];
+
+    // 打开保存网络接口信息的文件
+    fp = fopen("/proc/net/route", "r");
+    if (fp == NULL) {
+        perror("fopen");
+        return -1;
+    }
+
+    // 读取文件内容并查找默认路由
+    while (fgets(buf, MAX_BUF_SIZE, fp)) {
+        if (strstr(buf, "\t00000000") != NULL) {
+            sscanf(buf, "%s", interface);
+            break;
+        }
+    }
+    // 关闭文件
+    fclose(fp);
+    if (interface == NULL) {
+        printf("INFO: Network resetting...\n");
+        return NETWORK_RESET;
+    }
+    printf("INFO: Network Interface:[%s]\n", interface);
+    // 判断当前网络接口类型
+    if (strcmp(interface, "usb0") == 0 || strcmp(interface, "wwan0") == 0) {
+        return LTE_4G;
+    } else if (strstr(interface, "eth"))  {
+        return ETHERNET;
+    } else {
+        printf("INFO: Other network interfaces.\n");
+    }
+
+    return NETWORK_UNKNOW;
 }
 
 int get_spidev_path(char *spi_name)
@@ -1768,6 +1819,8 @@ void *statistics_collection_thread(void *arg)
     float rx_nocrc_ratio;
     float up_ack_ratio;
     float dw_ack_ratio;
+
+    int current_network = -1;
     /* main loop task : statistics collection */
     while (!exit_sig && !quit_sig) {
         /* wait for next reporting interval */
@@ -1940,6 +1993,25 @@ void *statistics_collection_thread(void *arg)
         }
         report_ready = true;
         pthread_mutex_unlock(&mx_stat_rep);
+
+        current_network = get_current_network_interface();
+        /* 网络状况（默认路由）发生改变 */
+        if (current_network != origin_network && current_network != NETWORK_RESET) {
+            printf("ERROR: The network interface has changed, fwd will be restarted.\n");
+            if (origin_network == LTE_4G) {
+                (void)system("ip route flush cache && /etc/init.d/network restart");
+                printf("INFO: waiting network reset finish....\n");
+                sleep(15);
+                (void)system("/etc/lorawan_scripts/lorawan_mode start &");
+            } else if (origin_network == ETHERNET) { // 以太网切4G不需要自己重启网络
+                char *script = "\
+                        ip route flush cache &\n\
+                        /etc/lorawan_scripts/lorawan_mode start &\n\
+                        ";
+                (void)system(script);
+            }
+            exit(EXIT_FAILURE);
+        }
     }
     return NULL;
 }
@@ -2054,6 +2126,15 @@ int main(int argc, char ** argv)
     /* get timezone info */
     tzset();
 
+    /* get Current Destination default route */
+    origin_network = get_current_network_interface();
+    if (origin_network == LTE_4G) {
+        printf("INFO: Current Destination default route is LTE 4G.\n");
+    } else if (origin_network == ETHERNET) {
+        printf("INFO: Current Destination default route is ETHERNET.\n");
+    } else {
+        MSG("WARN: Failed to get network interface.\n");
+    }
     /* sanity check on configuration variables */
     // TODO
 
@@ -2923,6 +3004,8 @@ void thread_down(void) {
     int32_t warning_value = 0;
     uint8_t tx_lut_idx = 0;
 
+    int current_network = -1;
+
     /* set downstream socket RX timeout */
     i = setsockopt(sock_down, SOL_SOCKET, SO_RCVTIMEO, (void *)&pull_timeout, sizeof pull_timeout);
     if (i != 0) {
@@ -3546,6 +3629,23 @@ void thread_down(void) {
         }
     }
     MSG("\nINFO: End of downstream thread\n");
+    current_network = get_current_network_interface();
+    if (current_network != origin_network && current_network != NETWORK_RESET) {
+        printf("ERROR: The network interface has changed, fwd will be restarted.\n");
+        if (origin_network == LTE_4G) {
+            (void)system("ip route flush cache && /etc/init.d/network restart");
+            printf("INFO: waiting network reset finish....\n");
+            sleep(15);
+            (void)system("/etc/lorawan_scripts/lorawan_mode start &");
+        } else if (origin_network == ETHERNET) { // 以太网切4G不需要自己重启网络
+            char *script = "\
+                    ip route flush cache &\n\
+                    /etc/lorawan_scripts/lorawan_mode start &\n\
+                    ";
+            (void)system(script);
+        }
+        exit(EXIT_FAILURE);
+    }
 }
 
 void print_tx_status(uint8_t tx_status) {
