@@ -357,6 +357,11 @@ static void usage( void )
     printf("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
 }
 
+void led_turn_off(void)
+{
+    lgw_rx_led_light_off();
+}
+
 static void sig_handler(int sigio) {
     if (sigio == SIGQUIT) {
         quit_sig = true;
@@ -394,7 +399,7 @@ static int get_current_network_interface(void)
         printf("INFO: Network resetting...\n");
         return NETWORK_RESET;
     }
-    printf("INFO: Network Interface:[%s]\n", interface);
+    printf("INFO: Network Destination Interface:[%s]\n", interface);
     // 判断当前网络接口类型
     if (strcmp(interface, "usb0") == 0 || strcmp(interface, "wwan0") == 0) {
         return LTE_4G;
@@ -1982,7 +1987,6 @@ void *statistics_collection_thread(void *arg)
         } else {
             printf("### Concentrator temperature: %.0f C ###\n", temperature);
         }
-        printf("##### END #####\n");
 
         /* generate a JSON report (will be sent to server by upstream thread) */
         pthread_mutex_lock(&mx_stat_rep);
@@ -1993,7 +1997,7 @@ void *statistics_collection_thread(void *arg)
         }
         report_ready = true;
         pthread_mutex_unlock(&mx_stat_rep);
-
+        printf("##### Network Route Status #####\n");
         current_network = get_current_network_interface();
         /* 网络状况（默认路由）发生改变 */
         if (current_network != origin_network && current_network != NETWORK_RESET) {
@@ -2012,6 +2016,7 @@ void *statistics_collection_thread(void *arg)
             }
             exit(EXIT_FAILURE);
         }
+        printf("##### END #####\n");
     }
     return NULL;
 }
@@ -2132,8 +2137,14 @@ int main(int argc, char ** argv)
         printf("INFO: Current Destination default route is LTE 4G.\n");
     } else if (origin_network == ETHERNET) {
         printf("INFO: Current Destination default route is ETHERNET.\n");
+    } else if (origin_network == NETWORK_RESET) {
+        MSG("WARN: Network is not ready, waitting and will restart.....\n");
+        sleep(10);
+        system("/etc/lorawan_scripts/lorawan_mode start &");
+        exit(EXIT_FAILURE);
     } else {
-        MSG("WARN: Failed to get network interface.\n");
+        MSG("ERROR: Network is unknow, will exit.\n");
+        exit(EXIT_FAILURE);
     }
     /* sanity check on configuration variables */
     // TODO
@@ -2210,7 +2221,12 @@ int main(int argc, char ** argv)
         exit(EXIT_FAILURE);
     }
     freeaddrinfo(result);
-
+    // 成功联网点亮LED
+    lgw_rx_led_light_on();
+    i = atexit(led_turn_off);
+    if (i < 0) {
+        MSG("WARN: Failed to register  led turn off function.\n");
+    }
     if (com_type == LGW_COM_SPI) {
         /* Board reset */
         if (system("sh /usr/bin/reset_lgw.sh start") != 0) {
@@ -2224,6 +2240,7 @@ int main(int argc, char ** argv)
             nb_pkt_log[l][m] = 0;
         }
     }
+
 
     /* starting the concentrator */
     i = lgw_start();
