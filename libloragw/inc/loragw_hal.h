@@ -592,6 +592,9 @@ int lgw_spectral_scan_get_results(int16_t levels_dbm[static LGW_SPECTRAL_SCAN_RE
 */
 int lgw_spectral_scan_abort();
 
+void lgw_rx_led_light_on(void);
+void lgw_rx_led_light_off(void);
+
 #endif
 
 /* --- EOF ------------------------------------------------------------------ */

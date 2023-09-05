@@ -32,7 +32,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #include <string.h>     /* memcpy */
 #include <unistd.h>     /* symlink, unlink */
 #include <inttypes.h>
-
+#include <pthread.h>
 #include "loragw_reg.h"
 #include "loragw_hal.h"
 #include "loragw_aux.h"
@@ -53,6 +53,64 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 
 #define HAL_DEBUG_FILE_LOG  0
 #define USE_I2C_SENSOR 0
+
+/* -------------------------------------------------------------------------- */
+/* --- LED Control CONSTANTS ------------------------------------------------ */
+pthread_t led_tid;
+static bool b_data_received = false;  // 表示是否收到数据
+pthread_mutex_t mutex;  // 互斥锁
+pthread_cond_t cond;  // 条件变量
+
+void lgw_rx_led_light_on(void) {
+    system("echo '1' > /sys/class/leds/led_lora/brightness");
+}
+
+void lgw_rx_led_light_off(void) {
+    system("echo '0' > /sys/class/leds/led_lora/brightness");
+}
+
+void lgw_rx_recieved_data_set_flag(void)
+{
+    pthread_mutex_lock(&mutex);
+    // 设置数据收到标志
+    b_data_received = true;
+    // 唤醒子线程
+    pthread_cond_signal(&cond);
+    pthread_mutex_unlock(&mutex);
+}
+
+void lgw_init_sync_objects() {
+    pthread_mutex_init(&mutex, NULL);
+    pthread_cond_init(&cond, NULL);
+}
+
+void lgw_destroy_sync_objects(void) {
+    // 销毁互斥锁和条件变量
+    pthread_mutex_destroy(&mutex);
+    pthread_cond_destroy(&cond);
+}
+
+void *lgw_led_thread(void *arg) {
+    while (true) {
+        // 上锁
+        pthread_mutex_lock(&mutex);
+        // 如果没有收到数据，则等待条件变量被唤醒
+        while (!b_data_received) {
+            pthread_cond_wait(&cond, &mutex);
+        }
+        b_data_received = false;
+        pthread_mutex_unlock(&mutex);
+
+        lgw_rx_led_light_on();
+        wait_ms(500);
+        lgw_rx_led_light_off();
+
+    }
+
+    return NULL;
+}
+
+
 
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE MACROS ------------------------------------------------------- */
@@ -1178,6 +1236,14 @@ int lgw_start(void) {
     /* set hal state */
     CONTEXT_STARTED = true;
 
+    /* 初始化互斥锁和条件变量 */
+    lgw_init_sync_objects();
+    err = pthread_create(&led_tid, NULL, lgw_led_thread, NULL);
+    if (err < 0) {
+        printf("WARN: failed to create led thread\n");
+    } else {
+        printf("INFO: Led thread create successfully.\n");
+    }
     DEBUG_PRINTF(" --- %s\n", "OUT");
 
     return LGW_HAL_SUCCESS;
@@ -1238,7 +1304,10 @@ int lgw_stop(void) {
 #endif
 
     CONTEXT_STARTED = false;
-
+    pthread_cancel(led_tid);
+    pthread_join(led_tid, NULL);
+    lgw_destroy_sync_objects();
+    lgw_rx_led_light_off();
     DEBUG_PRINTF(" --- %s\n", "OUT");
 
     return err;
@@ -1321,13 +1390,16 @@ int lgw_receive(uint8_t max_pkt, struct lgw_pkt_rx_s *pkt_data) {
         if (res != 0) {
             printf("WARNING: failed to remove duplicated packets\n");
         }
-
         DEBUG_PRINTF("INFO: nb pkt found:%u (after de-duplicating)\n", nb_pkt_found);
     }
 
     _meas_time_stop(1, tm, __FUNCTION__);
 
     DEBUG_PRINTF(" --- %s\n", "OUT");
+    if (nb_pkt_found > 0) {
+        // 唤醒led线程并让led闪烁
+        lgw_rx_recieved_data_set_flag();
+    }
 
     return nb_pkt_found;
 }

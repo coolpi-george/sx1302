@@ -357,6 +357,11 @@ static void usage( void )
     printf("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
 }
 
+void led_turn_off(void)
+{
+    lgw_rx_led_light_off();
+}
+
 static void sig_handler(int sigio) {
     if (sigio == SIGQUIT) {
         quit_sig = true;
@@ -2225,6 +2230,10 @@ int main(int argc, char ** argv)
         }
     }
 
+    i = atexit(led_turn_off);
+    if (i < 0) {
+        MSG("WARN: Failed to register cleanup function.\n");
+    }
     /* starting the concentrator */
     i = lgw_start();
     if (i == LGW_HAL_SUCCESS) {
