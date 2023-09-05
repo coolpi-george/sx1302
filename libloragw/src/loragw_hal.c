@@ -99,11 +99,9 @@ void *lgw_led_thread(void *arg) {
         }
         b_data_received = false;
         pthread_mutex_unlock(&mutex);
-
-        lgw_rx_led_light_on();
-        wait_ms(500);
         lgw_rx_led_light_off();
-
+        wait_ms(500);
+        lgw_rx_led_light_on();
     }
 
     return NULL;

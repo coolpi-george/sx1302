@@ -2221,7 +2221,12 @@ int main(int argc, char ** argv)
         exit(EXIT_FAILURE);
     }
     freeaddrinfo(result);
-
+    // 成功联网点亮LED
+    lgw_rx_led_light_on();
+    i = atexit(led_turn_off);
+    if (i < 0) {
+        MSG("WARN: Failed to register  led turn off function.\n");
+    }
     if (com_type == LGW_COM_SPI) {
         /* Board reset */
         if (system("sh /usr/bin/reset_lgw.sh start") != 0) {
@@ -2236,10 +2241,7 @@ int main(int argc, char ** argv)
         }
     }
 
-    i = atexit(led_turn_off);
-    if (i < 0) {
-        MSG("WARN: Failed to register cleanup function.\n");
-    }
+
     /* starting the concentrator */
     i = lgw_start();
     if (i == LGW_HAL_SUCCESS) {
