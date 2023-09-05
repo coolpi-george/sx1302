@@ -69,8 +69,7 @@ void lgw_rx_led_light_off(void) {
     system("echo '0' > /sys/class/leds/led_lora/brightness");
 }
 
-void lgw_rx_recieved_data_set_flag(void)
-{
+void lgw_rx_recieved_data_set_flag(void) {
     pthread_mutex_lock(&mutex);
     // 设置数据收到标志
     b_data_received = true;
