@@ -612,13 +612,11 @@ int parse_filter_configuration(void)
 void delete_dev_ht_node(void)
 {
     if (filter_enable == false || white_list_empty == true) {
-        MSG("INFO: no need to free ht node .");
         return;
     }
     int                   ret;
     struct cds_lfht_node *ht_node;
     dev_addr_htn_t       *dev_node;
-    printf("removing keys (single key, not duplicates):\n");
     urcu_memb_read_lock();
 
     cds_lfht_for_each_entry(dev_ht, &iter, dev_node, node)
