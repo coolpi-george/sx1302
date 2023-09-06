@@ -2182,6 +2182,14 @@ int main(int argc, char ** argv)
         exit(EXIT_FAILURE);
     }
 
+    i = atexit(led_turn_off);
+    if (i < 0) {
+        MSG("WARN: Failed to register  led turn off function.\n");
+    }
+
+    // 先点亮表示在联网，维持常亮说明联网成功，闪一下后熄灭代表联网失败
+    lgw_rx_led_light_on();
+
     /* connect so we can send/receive packet with the server only */
     i = connect(sock_up, q->ai_addr, q->ai_addrlen);
     if (i != 0) {
@@ -2221,12 +2229,8 @@ int main(int argc, char ** argv)
         exit(EXIT_FAILURE);
     }
     freeaddrinfo(result);
-    // 成功联网点亮LED
-    lgw_rx_led_light_on();
-    i = atexit(led_turn_off);
-    if (i < 0) {
-        MSG("WARN: Failed to register  led turn off function.\n");
-    }
+
+
     if (com_type == LGW_COM_SPI) {
         /* Board reset */
         if (system("sh /usr/bin/reset_lgw.sh start") != 0) {
