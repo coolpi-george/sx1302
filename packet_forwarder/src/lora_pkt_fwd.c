@@ -399,7 +399,7 @@ static int get_current_network_interface(void)
         printf("INFO: Network resetting...\n");
         return NETWORK_RESET;
     }
-    printf("INFO: Network Destination Interface:[%s]\n", interface);
+    printf("### Route Destination Interface:[%s] ###\n", interface);
     // 判断当前网络接口类型
     if (strcmp(interface, "usb0") == 0 || strcmp(interface, "wwan0") == 0) {
         return LTE_4G;
@@ -1996,7 +1996,6 @@ void *statistics_collection_thread(void *arg)
             snprintf(status_report, STATUS_SIZE, "\"stat\":{\"time\":\"%s\",\"rxnb\":%u,\"rxok\":%u,\"rxfw\":%u,\"ackr\":%.1f,\"dwnb\":%u,\"txnb\":%u,\"temp\":%.1f}", stat_timestamp, cp_nb_rx_rcv, cp_nb_rx_ok, cp_up_pkt_fwd, 100.0 * up_ack_ratio, cp_dw_dgram_rcv, cp_nb_tx_ok, temperature);
         }
         report_ready = true;
-        pthread_mutex_unlock(&mx_stat_rep);
         printf("##### Network Route Status #####\n");
         current_network = get_current_network_interface();
         /* 网络状况（默认路由）发生改变 */
@@ -2017,6 +2016,8 @@ void *statistics_collection_thread(void *arg)
             exit(EXIT_FAILURE);
         }
         printf("##### END #####\n");
+        pthread_mutex_unlock(&mx_stat_rep);
+
     }
     return NULL;
 }
