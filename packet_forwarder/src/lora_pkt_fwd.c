@@ -3649,23 +3649,6 @@ void thread_down(void) {
         }
     }
     MSG("\nINFO: End of downstream thread\n");
-    current_network = get_current_network_interface();
-    if (current_network != origin_network && current_network != NETWORK_RESET) {
-        printf("ERROR: The network interface has changed, fwd will be restarted.\n");
-        if (origin_network == LTE_4G) {
-            (void)system("ip route flush cache && /etc/init.d/network restart");
-            printf("INFO: waiting network reset finish....\n");
-            sleep(15);
-            (void)system("/etc/lorawan_scripts/lorawan_mode start &");
-        } else if (origin_network == ETHERNET) { // 以太网切4G不需要自己重启网络
-            char *script = "\
-                    ip route flush cache &\n\
-                    /etc/lorawan_scripts/lorawan_mode start &\n\
-                    ";
-            (void)system(script);
-        }
-        exit(EXIT_FAILURE);
-    }
 }
 
 void print_tx_status(uint8_t tx_status) {
