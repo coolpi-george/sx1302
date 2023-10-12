@@ -3024,8 +3024,6 @@ void thread_down(void) {
     int32_t warning_value = 0;
     uint8_t tx_lut_idx = 0;
 
-    int current_network = -1;
-
     /* set downstream socket RX timeout */
     i = setsockopt(sock_down, SOL_SOCKET, SO_RCVTIMEO, (void *)&pull_timeout, sizeof pull_timeout);
     if (i != 0) {
