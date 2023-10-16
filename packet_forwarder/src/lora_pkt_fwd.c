@@ -2192,25 +2192,12 @@ int main(int argc, char ** argv)
     lgw_rx_led_light_on();
 
 
-    int retries = 0;
-    /* connect so we can send/receive packet with the server only */
-    while (retries < MAX_RETRIES) {
-        // 调用connect绑定目标地址
-        i = connect(sock_up, q->ai_addr, q->ai_addrlen);
-        if (i < 0) {
-            MSG("ERROR: [up] connect returned%s, try to reconnect....\n", strerror(errno));
-            retries++;
-            sleep(5);  // 5秒后进行下一次重连
-        } else {
-            break;
-        }
-    }
 
-    if (retries == MAX_RETRIES) {
-        printf("Connection timeout\n");
-        exit(EXIT_FAILURE);
+    /* connect so we can send/receive packet with the server only */
+    i = connect(sock_up, q->ai_addr, q->ai_addrlen);
+    if (i != 0) {
+        MSG("ERROR: [up] connect returned %s\n", strerror(errno));
     }
-    printf("Connected successfully\n");
     freeaddrinfo(result);
 
     /* look for server address w/ downstream port */
@@ -2237,23 +2224,12 @@ int main(int argc, char ** argv)
         exit(EXIT_FAILURE);
     }
 
-    retries = 0;
-     /* connect so we can send/receive packet with the server only */
-    while (i < 0 && retries < MAX_RETRIES) {
-        // 调用connect绑定目标地址
-        i = connect(sock_down, q->ai_addr, q->ai_addrlen);
-        if (i < 0) {
-            MSG("ERROR: [up] connect returned%s, try to reconnect....\n", strerror(errno));
-            retries++;
-            sleep(5);  // 5秒后进行下一次重连
-        }
+    /* connect so we can send/receive packet with the server only */
+    i = connect(sock_down, q->ai_addr, q->ai_addrlen);
+    if (i != 0) {
+        MSG("ERROR: [down] connect returned %s\n", strerror(errno));
     }
 
-    if (retries == MAX_RETRIES) {
-        printf("Connection timeout\n");
-        exit(EXIT_FAILURE);
-    }
-    printf("Connected successfully\n");
     freeaddrinfo(result);
 
 
