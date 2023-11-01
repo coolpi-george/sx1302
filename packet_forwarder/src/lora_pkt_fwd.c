@@ -181,6 +181,7 @@ enum network_interface {
     NETWORK_UNKNOW,
     ETHERNET,
     LTE_4G,
+    WLAN,
 };
 int origin_network = -1;
 
@@ -403,8 +404,10 @@ static int get_current_network_interface(void)
     }
     printf("### Route Destination Interface:[%s] ###\n", interface);
     // 判断当前网络接口类型
-    if (strcmp(interface, "usb0") == 0 || strcmp(interface, "wwan0") == 0) {
+    if (strcmp(interface, "usb0") == 0) {
         return LTE_4G;
+    } else if (strcmp(interface, "wlan0") == 0) {
+        return WLAN;
     } else if (strstr(interface, "eth"))  {
         return ETHERNET;
     } else {
@@ -2001,7 +2004,7 @@ void *statistics_collection_thread(void *arg)
         /* 网络状况（默认路由）发生改变 */
         if (current_network != origin_network && current_network != NETWORK_RESET) {
             printf("ERROR: The network interface has changed, fwd will be restarted.\n");
-            if (origin_network == LTE_4G) {
+            if (origin_network == LTE_4G || origin_network == WLAN) {
                 (void)system("ip route flush cache && /etc/init.d/network restart");
                 printf("INFO: waiting network reset finish....\n");
                 sleep(15);
@@ -2138,6 +2141,8 @@ int main(int argc, char ** argv)
         printf("INFO: Current Destination default route is LTE 4G.\n");
     } else if (origin_network == ETHERNET) {
         printf("INFO: Current Destination default route is ETHERNET.\n");
+    } else if (origin_network == WLAN) {
+        printf("INFO: Current Destination default route is WLAN0.\n");
     } else if (origin_network == NETWORK_RESET) {
         MSG("WARN: Network is not ready, waitting and will restart.....\n");
         sleep(10);
