@@ -2005,7 +2005,7 @@ void *statistics_collection_thread(void *arg)
         if (current_network != origin_network && current_network != NETWORK_RESET) {
             printf("ERROR: The network interface has changed, fwd will be restarted.\n");
             if (origin_network == LTE_4G || origin_network == WLAN) {
-                (void)system("ip route flush cache && /etc/init.d/network restart");
+                (void)system("ip route flush cache");
                 printf("INFO: waiting network reset finish....\n");
                 sleep(15);
                 (void)system("/etc/lorawan_scripts/lorawan_mode start &");
