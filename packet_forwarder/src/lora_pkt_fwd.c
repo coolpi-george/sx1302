@@ -150,6 +150,7 @@ typedef struct spectral_scan_s {
 
 
 typedef struct dev_addr_htn {
+    uint8_t              dev_eui[8];
     uint32_t             value;
     uint32_t             seqnum; /* Our node sequence number */
     struct cds_lfht_node node;
@@ -2430,7 +2431,9 @@ void thread_up(void) {
     /* mote info variables */
     uint32_t mote_addr = 0;
     uint16_t mote_fcnt = 0;
-
+    uint8_t dev_eui[8];
+    uint8_t app_eui[8];
+    uint16_t dev_nonce;
     /* set upstream socket RX timeout */
     i = setsockopt(sock_up, SOL_SOCKET, SO_RCVTIMEO, (void *)&push_timeout_half, sizeof push_timeout_half);
     if (i != 0) {
@@ -2509,6 +2512,25 @@ void thread_up(void) {
             } else {
                 mote_addr = 0;
                 mote_fcnt = 0;
+            }
+            if (p->size >= 9) {
+                if (p->payload[0] == 0x00) {
+                    memcpy(dev_eui, &p->payload[1], 8);
+                    MSG("INFO: Dev eui:");
+                    for (size_t idx = 0; idx < 8 ; idx++) {
+                        MSG("%02X", dev_eui[idx]);
+                    }
+                    MSG("\n");
+                    MSG("INFO: App eui:");
+                    memcpy(app_eui, &p->payload[9], 8);
+                    for (size_t idx = 0; idx < 8 ; idx++) {
+                        MSG("%02X", app_eui[idx]);
+                    }
+                    MSG("\n");
+                    dev_nonce = (p->payload[17] << 8) | p->payload[18];
+                    MSG("INFO: Dev Nonce: %d\n", dev_nonce);
+                    MSG("\n");
+                }
             }
             if (lorawan_filter(mote_addr) < 0) {
                 continue;
@@ -3031,7 +3053,7 @@ void thread_down(void) {
     enum jit_error_e warning_result = JIT_ERROR_OK;
     int32_t warning_value = 0;
     uint8_t tx_lut_idx = 0;
-
+    uint8_t buff_acept[24] = { 0 };
     /* set downstream socket RX timeout */
     i = setsockopt(sock_down, SOL_SOCKET, SO_RCVTIMEO, (void *)&pull_timeout, sizeof pull_timeout);
     if (i != 0) {
@@ -3594,6 +3616,19 @@ void thread_down(void) {
                 MSG("WARNING: [down] mismatch between .size and .data size once converter to binary\n");
             }
 
+
+            {
+                memset(buff_acept, 0, 24);
+                memcpy(buff_acept, txpkt.payload, 24);
+                MSG("INFO: Join accept");
+                MSG("DevAddr:%02X%02X%02X%02X\n", buff_acept[0], buff_acept[1], buff_acept[2], buff_acept[3]);
+                MSG("AppsKey:%02X%02X%02X%02X\n", buff_acept[4], buff_acept[5], buff_acept[6], buff_acept[7]);
+                MSG("NwkSKey:");
+                for (int j = 8; j < 24; j++) {
+                    MSG("%2X", buff_acept[j]);
+                }
+                MSG("\n");
+            }
             /* free the JSON parse tree from memory */
             json_value_free(root_val);
 
