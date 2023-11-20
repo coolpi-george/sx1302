@@ -151,7 +151,6 @@ typedef struct spectral_scan_s {
 
 typedef struct dev_addr_htn {
     char     dev_eui[MAX_DEV_EUI + 1];
-    uint32_t value;
     uint32_t seqnum; /* Our node sequence number */
 
     struct cds_lfht_node node;
@@ -547,7 +546,6 @@ int parse_filter_configuration(void)
             cds_lfht_node_init(&dev_node->node);
             strncpy(dev_node->dev_eui, str, MAX_DEV_EUI);
             dev_node->dev_eui[MAX_DEV_EUI] = '\0';
-
             ++seqnum;
             dev_node->seqnum = seqnum;
             hash             = jhash(str, MAX_DEV_EUI, seed);
@@ -614,9 +612,10 @@ static int lorawan_deveui_filter(const char *dev_eui, size_t length)
     }
     urcu_memb_read_unlock();
     if (is_exist) {
+        MSG("INFO: [up] Dev EUI:%s in whitelist, Send OTAA packet to NS.\n", dev_eui);
         return FILTER_PASS;
     }
-    MSG("INFO: [up] Dev EUI:%s not in whitelist, won't be sent to NS.\n", dev_eui);
+    MSG("INFO: [up] Dev EUI:%s not in whitelist, OTAA packet won't be sent to NS.\n", dev_eui);
     return FILTER_INTERCEPT;
 }
 
