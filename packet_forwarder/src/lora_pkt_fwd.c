@@ -134,7 +134,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #define DEFAULT_BEACON_POWER        14
 #define DEFAULT_BEACON_INFODESC     0
 
-#define MAX_RETRIES 36  // 最大重连次数，每次间隔5秒，总共3分钟
+#define MAX_DEV_EUI 16
 
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE TYPES -------------------------------------------------------- */
@@ -150,9 +150,10 @@ typedef struct spectral_scan_s {
 
 
 typedef struct dev_addr_htn {
-    uint8_t              dev_eui[8];
-    uint32_t             value;
-    uint32_t             seqnum; /* Our node sequence number */
+    char     dev_eui[MAX_DEV_EUI + 1];
+    uint32_t value;
+    uint32_t seqnum; /* Our node sequence number */
+
     struct cds_lfht_node node;
 } dev_addr_htn_t;
 
@@ -465,57 +466,11 @@ int get_local_eth_mac(unsigned char *mac_address)
     return 0;
 }
 
-
-bool hex_characters(const char ch)
-{
-    if ((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'F') || (ch >= 'a' && ch <= 'f')) {
-        return true;
-    }
-    return false;
-}
-
-static int dev_addr_str2hex(short *pbDest, const char *pbSrc, int nLen)
-{
-    if (nLen != MAX_LORA_MAC) {
-        printf("ERROR: n len is less than 8 bytes.\n");
-        return -1;
-    }
-    char h1, h2;
-    int  i;
-    char hex[3] = { 0 };
-    for (i = 0; i < (nLen / 2); i++) {
-        memset(hex, 0, 3);
-        h1 = pbSrc[2 * i];
-        h2 = pbSrc[2 * i + 1];
-        if (hex_characters(h1) && hex_characters(h2)) {
-            snprintf(hex, 3, "%c%c", h1, h2);
-            pbDest[i] = (int)strtol(hex, NULL, 16);
-        } else {
-            printf("ERROR: format.");
-            return -1;
-        }
-    }
-    return 0;
-}
-
-static int dev_addr_hex2int(short *dev_array, uint32_t *addr_val)
-{
-    if (dev_array == NULL || addr_val == NULL) {
-        MSG("ERROR, null poiter.\n");
-        return -1;
-    }
-    *addr_val = dev_array[3];
-    *addr_val |= (dev_array[2]) << 8;
-    *addr_val |= (dev_array[1]) << 16;
-    *addr_val |= (dev_array[0]) << 24;
-    return 0;
-}
-
 int match(struct cds_lfht_node *ht_node, const void *_key)
 {
     dev_addr_htn_t *match_node = caa_container_of(ht_node, dev_addr_htn_t, node);
-    const uint32_t *key        = _key;
-    return (*key == match_node->value);
+    const char *key = _key;
+    return !(strncmp(key, match_node->dev_eui, MAX_DEV_EUI));
 }
 
 
@@ -528,8 +483,6 @@ int parse_filter_configuration(void)
     JSON_Value     *val        = NULL; /* needed to detect the absence of some fields */
     const char     *str;
     unsigned long   hash           = 0;
-    short           value_array[4] = { 0 };
-    uint32_t        addr_value     = 0;
     uint32_t        seqnum         = 0;
     /* try to parse JSON */
     root_val = json_parse_file_with_comments(FILTER_CONF_PATH_DEFAULT);
@@ -584,29 +537,24 @@ int parse_filter_configuration(void)
     for (int i = 0; i < (int)json_array_get_count(conf_array); ++i) {
         str = json_array_get_string(conf_array, i);
         MSG("INFO: While list dev: %s \n", str);
-        memset(value_array, 0, sizeof(value_array));
-        if (dev_addr_str2hex(value_array, str, strlen(str)) == -1) {
-            MSG("ERROR: dev_addr[%s]str2hex is failed.\n", str);
-            continue;
+        if (str != NULL && strlen(str) == MAX_DEV_EUI) {
+            dev_node = (dev_addr_htn_t *)malloc(sizeof(dev_addr_htn_t));
+            if (!dev_node) {
+                json_value_free(root_val);
+                MSG("ERROR: dev_node is null.\n");
+                return -1;
+            }
+            cds_lfht_node_init(&dev_node->node);
+            strncpy(dev_node->dev_eui, str, MAX_DEV_EUI);
+            dev_node->dev_eui[MAX_DEV_EUI] = '\0';
+
+            ++seqnum;
+            dev_node->seqnum = seqnum;
+            hash             = jhash(str, MAX_DEV_EUI, seed);
+            urcu_memb_read_lock();
+            cds_lfht_add(dev_ht, hash, &dev_node->node);
+            urcu_memb_read_unlock();
         }
-        if (dev_addr_hex2int(value_array, &addr_value) == -1) {
-            MSG("ERROR: dev_addr[%s]hex2int is failed.\n", str);
-            continue;
-        }
-        dev_node = (dev_addr_htn_t *)malloc(sizeof(dev_addr_htn_t));
-        if (!dev_node) {
-            json_value_free(root_val);
-            MSG("ERROR: dev_node is null.\n");
-            return -1;
-        }
-        cds_lfht_node_init(&dev_node->node);
-        dev_node->value  = addr_value;
-        ++seqnum;
-        dev_node->seqnum = seqnum;
-        hash             = jhash(&addr_value, sizeof(int), seed);
-        urcu_memb_read_lock();
-        cds_lfht_add(dev_ht, hash, &dev_node->node);
-        urcu_memb_read_unlock();
     }
     MSG("INFO: [%d] devices to filter.\n", dev_node->seqnum);
     /* free JSON parsing data structure */
@@ -638,34 +586,38 @@ void delete_dev_ht_node(void)
     urcu_memb_read_unlock();
 }
 
+enum filterResut {
+    FILTER_PASS,
+    FILTER_INTERCEPT,
+};
+
 /*匹配哈希表的dev mac 成功/列表为空返回 0 失败返回 1*/
-static int lorawan_filter(uint32_t mote_addr)
+static int lorawan_deveui_filter(const char *dev_eui, size_t length)
 {
-    if (filter_enable == false) {
-        return 0;
+    if (filter_enable == false || length != MAX_DEV_EUI) {
+        return FILTER_PASS;
     }
     if (white_list_empty == true) {
         MSG("INFO: empty while list, no mac filter.");
-        return 0;
+        return FILTER_PASS;
     }
-    int             value    = mote_addr;
     dev_addr_htn_t *dev_node = NULL;
-    unsigned long   hash     = jhash(&value, sizeof(value), seed);
+    unsigned long   hash     = jhash(dev_eui, length, seed);
     bool            is_exist = false;
     urcu_memb_read_lock();
-    cds_lfht_for_each_entry_duplicate(dev_ht, hash, match, &value, &iter, dev_node, node)
+    cds_lfht_for_each_entry_duplicate(dev_ht, hash, match, dev_eui, &iter, dev_node, node)
     {
-        if ((int)dev_node->value == value) {
+        if (strncmp(dev_node->dev_eui, dev_eui, MAX_DEV_EUI) == 0) {
             is_exist = true;
             break;
         }
     }
     urcu_memb_read_unlock();
     if (is_exist) {
-        return 0;
+        return FILTER_PASS;
     }
-    MSG("INFO: [up] Filter dev mac :%08X\n", mote_addr);
-    return -1;
+    MSG("INFO: [up] Dev EUI:%s not in whitelist, won't be sent to NS.\n", dev_eui);
+    return FILTER_INTERCEPT;
 }
 
 static int parse_SX130x_configuration(const char * conf_file) {
@@ -2515,25 +2467,29 @@ void thread_up(void) {
             }
             if (p->size >= 9) {
                 if (p->payload[0] == 0x00) {
+                    char dev_eui_str[MAX_DEV_EUI + 1] = { 0 };
+                    dev_eui_str[MAX_DEV_EUI] = '\0';
                     memcpy(dev_eui, &p->payload[1], 8);
                     MSG("INFO: Dev eui:");
                     for (size_t idx = 0; idx < 8 ; idx++) {
-                        MSG("%02X", dev_eui[idx]);
+                        MSG("%02X", dev_eui[7 - idx]);
+                        sprintf(&dev_eui_str[idx * 2], "%02X", dev_eui[7 - idx]);
                     }
                     MSG("\n");
                     MSG("INFO: App eui:");
                     memcpy(app_eui, &p->payload[9], 8);
                     for (size_t idx = 0; idx < 8 ; idx++) {
-                        MSG("%02X", app_eui[idx]);
+                        MSG("%02X", app_eui[7 - idx]);
                     }
                     MSG("\n");
                     dev_nonce = (p->payload[17] << 8) | p->payload[18];
                     MSG("INFO: Dev Nonce: %d\n", dev_nonce);
                     MSG("\n");
+
+                    if (lorawan_deveui_filter(dev_eui_str, strlen(dev_eui_str)) == FILTER_INTERCEPT) {
+                        continue;
+                    }
                 }
-            }
-            if (lorawan_filter(mote_addr) < 0) {
-                continue;
             }
 
             /* basic packet filtering */
