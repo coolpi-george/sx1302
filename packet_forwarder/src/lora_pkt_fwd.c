@@ -2464,11 +2464,18 @@ void thread_up(void) {
                 mote_addr = 0;
                 mote_fcnt = 0;
             }
+            // +-----------------------------------------+
+            // |                JOIN FRAME               |
+            // +-----+---------+--------+----------+-----+
+            // |  1  |     8   |    8   |    2     |  4  |  bytes - all fields little endian
+            // +=====+=========+========+==========+=====+
+            // | mhdr| joineui | deveui | devnonce | MIC |
+            // +-----+---------+--------+----------+-----+
             if (p->size >= 9) {
                 if (p->payload[0] == 0x00) {
                     char dev_eui_str[MAX_DEV_EUI + 1] = { 0 };
                     dev_eui_str[MAX_DEV_EUI] = '\0';
-                    memcpy(dev_eui, &p->payload[1], 8);
+                    memcpy(dev_eui, &p->payload[9], 8);
                     MSG("INFO: Dev eui:");
                     for (size_t idx = 0; idx < 8 ; idx++) {
                         MSG("%02X", dev_eui[7 - idx]);
@@ -2476,7 +2483,7 @@ void thread_up(void) {
                     }
                     MSG("\n");
                     MSG("INFO: App eui:");
-                    memcpy(app_eui, &p->payload[9], 8);
+                    memcpy(app_eui, &p->payload[1], 8);
                     for (size_t idx = 0; idx < 8 ; idx++) {
                         MSG("%02X", app_eui[7 - idx]);
                     }
