@@ -1957,18 +1957,16 @@ void *statistics_collection_thread(void *arg)
         if (current_network != origin_network && current_network != NETWORK_RESET) {
             printf("ERROR: The network interface has changed, fwd will be restarted.\n");
             if (origin_network == LTE_4G || origin_network == WLAN) {
-                (void)system("ip route flush cache");
                 printf("INFO: waiting network reset finish....\n");
                 sleep(15);
-                (void)system("/etc/lorawan_scripts/lorawan_mode start &");
+                i = system("/etc/lorawan_scripts/lorawan_mode start &");
             } else if (origin_network == ETHERNET) { // 以太网切4G不需要自己重启网络
-                char *script = "\
-                        ip route flush cache &\n\
-                        /etc/lorawan_scripts/lorawan_mode start &\n\
-                        ";
-                (void)system(script);
+                i = system("/etc/lorawan_scripts/lorawan_mode start &");
             }
-            exit(EXIT_FAILURE);
+            if (i != 0) {
+                exit(EXIT_FAILURE);
+            }
+            exit(EXIT_SUCCESS);
         }
         printf("##### END #####\n");
         pthread_mutex_unlock(&mx_stat_rep);
