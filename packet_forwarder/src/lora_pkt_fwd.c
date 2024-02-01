@@ -2382,8 +2382,8 @@ void thread_up(void) {
     uint32_t mote_addr = 0;
     uint16_t mote_fcnt = 0;
     uint8_t dev_eui[8];
-    uint8_t app_eui[8];
-    uint16_t dev_nonce;
+    // uint8_t app_eui[8];
+    // uint16_t dev_nonce;
     /* set upstream socket RX timeout */
     i = setsockopt(sock_up, SOL_SOCKET, SO_RCVTIMEO, (void *)&push_timeout_half, sizeof push_timeout_half);
     if (i != 0) {
@@ -2475,21 +2475,21 @@ void thread_up(void) {
                     char dev_eui_str[MAX_DEV_EUI + 1] = { 0 };
                     dev_eui_str[MAX_DEV_EUI] = '\0';
                     memcpy(dev_eui, &p->payload[9], 8);
-                    MSG("INFO: Dev eui:");
+                    // MSG("INFO: Dev eui:");
                     for (size_t idx = 0; idx < 8 ; idx++) {
-                        MSG("%02X", dev_eui[7 - idx]);
+                        // MSG("%02X", dev_eui[7 - idx]);
                         sprintf(&dev_eui_str[idx * 2], "%02X", dev_eui[7 - idx]);
                     }
-                    MSG("\n");
-                    MSG("INFO: App eui:");
-                    memcpy(app_eui, &p->payload[1], 8);
-                    for (size_t idx = 0; idx < 8 ; idx++) {
-                        MSG("%02X", app_eui[7 - idx]);
-                    }
-                    MSG("\n");
-                    dev_nonce = (p->payload[17] << 8) | p->payload[18];
-                    MSG("INFO: Dev Nonce: %d\n", dev_nonce);
-                    MSG("\n");
+                    // MSG("\n");
+                    // MSG("INFO: App eui:");
+                    // memcpy(app_eui, &p->payload[1], 8);
+                    // for (size_t idx = 0; idx < 8 ; idx++) {
+                    //     MSG("%02X", app_eui[7 - idx]);
+                    // }
+                    // MSG("\n");
+                    // dev_nonce = (p->payload[17] << 8) | p->payload[18];
+                    // MSG("INFO: Dev Nonce: %d\n", dev_nonce);
+                    // MSG("\n");
 
                     if (lorawan_deveui_filter(dev_eui_str, strlen(dev_eui_str)) == FILTER_INTERCEPT) {
                         continue;
