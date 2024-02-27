@@ -193,6 +193,9 @@ int main(int argc, char **argv)
 
     x = lgw_start();
     if (x != 0) {
+        if (system("echo 0 > /sys/class/leds/led_lora/brightness") != 0) {
+            exit(EXIT_FAILURE);
+        }
         printf("ERROR: failed to start the gateway\n");
         return EXIT_FAILURE;
     }
@@ -219,7 +222,9 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
         }
     }
-
+    if (system("echo 1 > /sys/class/leds/led_lora/brightness") != 0) {
+        exit(EXIT_FAILURE);
+    }
     return 0;
 }
 
