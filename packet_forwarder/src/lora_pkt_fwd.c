@@ -52,7 +52,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 
 #include <sys/ioctl.h>
 
-
+#include <ctype.h>
 #include <pthread.h>
 
 #include "trace.h"
@@ -465,6 +465,16 @@ int get_local_eth_mac(unsigned char *mac_address)
     return 0;
 }
 
+void convert2upper(char *str)
+{
+    while (*str) {
+        if (isupper(*str)) {
+            *str = tolower(*str);
+        }
+        str++;
+    }
+}
+
 int match(struct cds_lfht_node *ht_node, const void *_key)
 {
     dev_addr_htn_t *match_node = caa_container_of(ht_node, dev_addr_htn_t, node);
@@ -535,7 +545,6 @@ int parse_filter_configuration(void)
 
     for (int i = 0; i < (int)json_array_get_count(conf_array); ++i) {
         str = json_array_get_string(conf_array, i);
-        MSG("INFO: While list dev: %s \n", str);
         if (str != NULL && strlen(str) == MAX_DEV_EUI) {
             dev_node = (dev_addr_htn_t *)malloc(sizeof(dev_addr_htn_t));
             if (!dev_node) {
@@ -545,7 +554,9 @@ int parse_filter_configuration(void)
             }
             cds_lfht_node_init(&dev_node->node);
             strncpy(dev_node->dev_eui, str, MAX_DEV_EUI);
+            convert2upper(dev_node->dev_eui);
             dev_node->dev_eui[MAX_DEV_EUI] = '\0';
+            MSG("INFO: While list dev: %s \n", dev_node->dev_eui);
             ++seqnum;
             dev_node->seqnum = seqnum;
             hash             = jhash(str, MAX_DEV_EUI, seed);
