@@ -33,6 +33,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #include <unistd.h>     /* symlink, unlink */
 #include <inttypes.h>
 #include <pthread.h>
+#include <fcntl.h>    
 #include "loragw_reg.h"
 #include "loragw_hal.h"
 #include "loragw_aux.h"
@@ -58,47 +59,80 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 /* --- LED Control CONSTANTS ------------------------------------------------ */
 pthread_t led_tid;
 static bool b_data_received = false;  // 表示是否收到数据
-pthread_mutex_t mutex;  // 互斥锁
-pthread_cond_t cond;  // 条件变量
+pthread_mutex_t lora_led_mutex;  // 互斥锁
+pthread_cond_t lora_led_cond;  // 条件变量
+
+// 定义LED控制文件路径
+#define LED_BRIGHTNESS_PATH "/sys/class/leds/led_lora/brightness"
+
+// led_control 函数用于设置LED的状态
+// state 为 0 时关闭LED，为 1 时打开LED
+void led_control(int state) {
+    int fd, written;
+    const char *value = state ? "1" : "0"; // 根据state设置LED开或关的值
+    char buffer[2] = {0}; // 创建一个缓冲区用于写入
+
+    // 打开LED控制文件
+    fd = open(LED_BRIGHTNESS_PATH, O_WRONLY);
+    if (fd == -1) {
+        perror("Error opening LED control file");
+        return;
+    }
+
+    // 将状态值复制到缓冲区
+    buffer[0] = value[0];
+
+    // 写入LED控制文件
+    written = write(fd, buffer, 1);
+    if (written == -1) {
+        perror("Error writing to LED control file");
+    }
+
+    // 关闭LED控制文件
+    if (close(fd) == -1) {
+        perror("Error closing LED control file");
+    }
+}
 
 void lgw_rx_led_light_on(void) {
-    system("echo '1' > /sys/class/leds/led_lora/brightness");
+    led_control(1);
 }
 
 void lgw_rx_led_light_off(void) {
-    system("echo '0' > /sys/class/leds/led_lora/brightness");
+    led_control(0);
 }
 
 void lgw_rx_recieved_data_set_flag(void) {
-    pthread_mutex_lock(&mutex);
+    pthread_mutex_lock(&lora_led_mutex);
     // 设置数据收到标志
     b_data_received = true;
     // 唤醒子线程
-    pthread_cond_signal(&cond);
-    pthread_mutex_unlock(&mutex);
+    pthread_cond_signal(&lora_led_cond);
+    pthread_mutex_unlock(&lora_led_mutex);
 }
 
-void lgw_init_sync_objects() {
-    pthread_mutex_init(&mutex, NULL);
-    pthread_cond_init(&cond, NULL);
+void lgw_init_sync_objects(void) {
+    pthread_mutex_init(&lora_led_mutex, NULL);
+    pthread_cond_init(&lora_led_cond, NULL);
 }
 
 void lgw_destroy_sync_objects(void) {
     // 销毁互斥锁和条件变量
-    pthread_mutex_destroy(&mutex);
-    pthread_cond_destroy(&cond);
+    pthread_mutex_destroy(&lora_led_mutex);
+    pthread_cond_destroy(&lora_led_cond);
 }
 
 void *lgw_led_thread(void *arg) {
+    (void)arg;
     while (true) {
         // 上锁
-        pthread_mutex_lock(&mutex);
+        pthread_mutex_lock(&lora_led_mutex);
         // 如果没有收到数据，则等待条件变量被唤醒
         while (!b_data_received) {
-            pthread_cond_wait(&cond, &mutex);
+            pthread_cond_wait(&lora_led_cond, &lora_led_mutex);
         }
         b_data_received = false;
-        pthread_mutex_unlock(&mutex);
+        pthread_mutex_unlock(&lora_led_mutex);
         lgw_rx_led_light_off();
         wait_ms(500);
         lgw_rx_led_light_on();
