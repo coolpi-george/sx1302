@@ -1338,7 +1338,7 @@ int lgw_stop(void) {
     pthread_cancel(led_tid);
     pthread_join(led_tid, NULL);
     lgw_destroy_sync_objects();
-    lgw_rx_led_light_off();
+    lgw_rx_led_light_on();
     DEBUG_PRINTF(" --- %s\n", "OUT");
 
     return err;

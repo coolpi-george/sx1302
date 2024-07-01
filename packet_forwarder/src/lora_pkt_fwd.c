@@ -361,11 +361,6 @@ static void usage( void )
     printf("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n");
 }
 
-void led_turn_off(void)
-{
-    lgw_rx_led_light_off();
-}
-
 static void sig_handler(int sigio) {
     if (sigio == SIGQUIT) {
         quit_sig = true;
@@ -2148,11 +2143,6 @@ int main(int argc, char ** argv)
             ++i;
         }
         exit(EXIT_FAILURE);
-    }
-
-    i = atexit(led_turn_off);
-    if (i < 0) {
-        MSG("WARN: Failed to register  led turn off function.\n");
     }
 
     // 先点亮表示在联网，维持常亮说明联网成功，闪一下后熄灭代表联网失败
