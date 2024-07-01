@@ -2145,11 +2145,6 @@ int main(int argc, char ** argv)
         exit(EXIT_FAILURE);
     }
 
-    // 先点亮表示在联网，维持常亮说明联网成功，闪一下后熄灭代表联网失败
-    lgw_rx_led_light_on();
-
-
-
     /* connect so we can send/receive packet with the server only */
     i = connect(sock_up, q->ai_addr, q->ai_addrlen);
     if (i != 0) {
