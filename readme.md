@@ -1,3 +1,16 @@
+This is a repo forked from
+https://github.com/Lora-net/sx1302_hal
+
+But there is another cloned repo:
+https://www.statuscode200.com/gitlab/lorawan-setup/sx1302_hal.git
+with modifications to make it work with recent Bookworm based raspberry pi
+OS and accepts GPS from recievers other than u-blox.
+
+I copied the modifications from the other cloned repo into this repo,
+to make the modifications visible for people who find the original repo
+and to make pull request to the original repo.
+
+
 	 / _____)             _              | |
 	( (____  _____ ____ _| |_ _____  ____| |__
 	 \____ \| ___ |    (_   _) ___ |/ ___)  _ \

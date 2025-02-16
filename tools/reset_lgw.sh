@@ -12,9 +12,9 @@
 # GPIO mapping has to be adapted with HW
 #
 
-SX1302_RESET_PIN=23     # SX1302 reset
+SX1302_RESET_PIN=17     # SX1302 reset
 SX1302_POWER_EN_PIN=18  # SX1302 power enable
-SX1261_RESET_PIN=22     # SX1261 reset (LBT / Spectral Scan)
+SX1261_RESET_PIN=5     # SX1261 reset (LBT / Spectral Scan)
 AD5338R_RESET_PIN=13    # AD5338R reset (full-duplex CN490 reference design)
 
 WAIT_GPIO() {
@@ -22,17 +22,13 @@ WAIT_GPIO() {
 }
 
 init() {
-    # setup GPIOs
-    echo "$SX1302_RESET_PIN" > /sys/class/gpio/export; WAIT_GPIO
-    echo "$SX1261_RESET_PIN" > /sys/class/gpio/export; WAIT_GPIO
-    echo "$SX1302_POWER_EN_PIN" > /sys/class/gpio/export; WAIT_GPIO
-    echo "$AD5338R_RESET_PIN" > /sys/class/gpio/export; WAIT_GPIO
 
     # set GPIOs as output
-    echo "out" > /sys/class/gpio/gpio$SX1302_RESET_PIN/direction; WAIT_GPIO
-    echo "out" > /sys/class/gpio/gpio$SX1261_RESET_PIN/direction; WAIT_GPIO
-    echo "out" > /sys/class/gpio/gpio$SX1302_POWER_EN_PIN/direction; WAIT_GPIO
-    echo "out" > /sys/class/gpio/gpio$AD5338R_RESET_PIN/direction; WAIT_GPIO
+    pinctrl set $SX1302_RESET_PIN op; WAIT_GPIO
+    pinctrl set $SX1261_RESET_PIN op; WAIT_GPIO
+    pinctrl set $SX1302_POWER_EN_PIN op; WAIT_GPIO
+    pinctrl set $AD5338R_RESET_PIN op; WAIT_GPIO
+
 }
 
 reset() {
@@ -42,16 +38,20 @@ reset() {
     echo "CoreCell ADC reset through GPIO$AD5338R_RESET_PIN..."
 
     # write output for SX1302 CoreCell power_enable and reset
-    echo "1" > /sys/class/gpio/gpio$SX1302_POWER_EN_PIN/value; WAIT_GPIO
+    pinctrl set $SX1302_POWER_EN_PIN op; WAIT_GPIO
+    pinctrl set $SX1302_POWER_EN_PIN op dh; WAIT_GPIO
 
-    echo "1" > /sys/class/gpio/gpio$SX1302_RESET_PIN/value; WAIT_GPIO
-    echo "0" > /sys/class/gpio/gpio$SX1302_RESET_PIN/value; WAIT_GPIO
+    pinctrl set $SX1302_RESET_PIN op; WAIT_GPIO
+    pinctrl set $SX1302_RESET_PIN op dh; WAIT_GPIO
+    pinctrl set $SX1302_RESET_PIN op dl; WAIT_GPIO
 
-    echo "0" > /sys/class/gpio/gpio$SX1261_RESET_PIN/value; WAIT_GPIO
-    echo "1" > /sys/class/gpio/gpio$SX1261_RESET_PIN/value; WAIT_GPIO
+    pinctrl set $SX1261_RESET_PIN op; WAIT_GPIO
+    pinctrl set $SX1261_RESET_PIN op dl; WAIT_GPIO
+    pinctrl set $SX1261_RESET_PIN op dh; WAIT_GPIO
 
-    echo "0" > /sys/class/gpio/gpio$AD5338R_RESET_PIN/value; WAIT_GPIO
-    echo "1" > /sys/class/gpio/gpio$AD5338R_RESET_PIN/value; WAIT_GPIO
+    pinctrl set $AD5338R_RESET_PIN op; WAIT_GPIO
+    pinctrl set $AD5338R_RESET_PIN op dl; WAIT_GPIO
+    pinctrl set $AD5338R_RESET_PIN op dh; WAIT_GPIO
 }
 
 term() {
