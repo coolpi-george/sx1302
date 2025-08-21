@@ -123,7 +123,7 @@ the _start and _send functions assume they are valid.
 static lgw_context_t lgw_context = {
     .is_started = false,
     .board_cfg.com_type = LGW_COM_SPI,
-    .board_cfg.com_path = "/dev/spidev0.0",
+    .board_cfg.com_path = "/dev/spidev1.0",
     .board_cfg.lorawan_public = true,
     .board_cfg.clksrc = 0,
     .board_cfg.full_duplex = false,
@@ -185,7 +185,7 @@ static lgw_context_t lgw_context = {
     },
     .sx1261_cfg = {
         .enable = false,
-        .spi_path = "/dev/spidev0.1",
+        .spi_path = "/dev/spidev1.0",
         .rssi_offset = 0,
         .lbt_conf = {
             .rssi_target = 0,

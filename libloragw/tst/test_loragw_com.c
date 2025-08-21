@@ -52,7 +52,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #define SX1302_REG_AGC_MCU  0x5780
 
 #define COM_TYPE_DEFAULT LGW_COM_SPI
-#define COM_PATH_DEFAULT "/dev/spidev0.0"
+#define COM_PATH_DEFAULT "/dev/spidev1.0"
 
 /* -------------------------------------------------------------------------- */
 /* --- GLOBAL VARIABLES ----------------------------------------------------- */
